@@ -168,37 +168,76 @@ cd CampusGuideKiosk
 
 ## Deployment Options
 
-### Option 1: Heroku (Easy, Free tier deprecated)
+### ⭐ Option 1: Render (RECOMMENDED)
+Best for Flask apps with ML models and persistent memory.
+
+**Features:**
+- ✅ Python-optimized
+- ✅ $7/month for always-on service
+- ✅ Free tier available
+- ✅ Auto-deploy from GitHub
+- ✅ Built-in monitoring
+
+**Quick Start:**
+1. Go to [render.com](https://render.com)
+2. Sign up with GitHub
+3. Connect `CampusGuideKiosk` repository
+4. Set environment variables
+5. Deploy!
+
+**Full Guide:** See [RENDER_DEPLOYMENT.md](RENDER_DEPLOYMENT.md)
+
 ```bash
-# Install Heroku CLI and login
-heroku login
-
-# Create Heroku app
-heroku create your-app-name
-
-# Create Procfile
-echo "web: gunicorn --workers 4 app:app" > Procfile
-
-# Set environment variables
-heroku config:set FIREBASE_API_KEY=your_key
-heroku config:set API_KEY_1=your_gemini_key
-
-# Deploy
-git push heroku main
+# Or deploy via CLI:
+npm i -g @render/cli
+render login
+render init
 ```
 
+---
+
 ### Option 2: PythonAnywhere (Good for educational projects)
+Simplest option - no CLI needed.
+
 1. Sign up at [pythonanywhere.com](https://www.pythonanywhere.com)
 2. Create new web app (Flask)
 3. Upload files and set up virtual environment
 4. Configure .env in web app settings
 5. Set API keys as environment variables
 
-### Option 3: Docker + Cloud Run (Google Cloud)
+**Cost:** Free tier available, $5+/month for production
+
+---
+
+### Option 3: Heroku (Legacy - Free tier removed)
+```bash
+# Note: Heroku removed free tier. Now starts at $7/month like Render
+# Use Render instead (simpler setup)
+
+heroku login
+heroku create your-app-name
+echo "web: gunicorn --workers 4 app:app" > Procfile
+heroku config:set FIREBASE_API_KEY=your_key
+git push heroku main
+```
+
+---
+
+### Option 4: Docker + Cloud Run (Google Cloud)
+For advanced users wanting serverless + scaling.
+
 See the Dockerfile template in README.md
 
-### Option 4: Your Own Server
-Use `gunicorn` with a reverse proxy (nginx) on a VPS
+**Cost:** Pay-per-use, free tier available ($5 credit/month)
+
+---
+
+### Option 5: Your Own Server
+Use `gunicorn` with a reverse proxy (nginx) on a VPS.
+
+**Providers:** DigitalOcean, Linode, AWS EC2
+
+**Cost:** $5-20/month depending on server size
 
 ---
 
