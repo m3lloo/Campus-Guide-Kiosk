@@ -4,13 +4,13 @@ A Flask-based interactive kiosk application that provides campus information and
 
 ## Features
 
-- 🤖 **AI-Powered Search**: Uses Sentence Transformers for semantic understanding
-- 🧠 **Gemini Integration**: AI-generated responses to campus queries
-- 🔥 **Firebase Backend**: Real-time FAQ database
-- 🌐 **Unity WebGL Frontend**: Interactive 3D campus map
-- 💾 **Vectorized Search**: Fast in-memory embedding-based retrieval
-- 🔄 **LRU Cache**: Optimized query caching for repeated questions
-- 🔀 **API Key Rotation**: Automatic Gemini API key fallback on quota limits
+- AI-Powered Search: Uses Sentence Transformers for semantic understanding
+- Gemini Integration: AI-generated responses to campus queries
+- Firebase Backend: Real-time FAQ database
+- Unity WebGL Frontend: Interactive 3D campus map
+- Vectorized Search: Fast in-memory embedding-based retrieval
+- LRU Cache: Optimized query caching for repeated questions
+- API Key Rotation: Automatic Gemini API key fallback on quota limits
 
 ## Project Structure
 
