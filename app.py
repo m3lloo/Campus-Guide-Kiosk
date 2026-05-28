@@ -73,7 +73,8 @@ try:
             firebase_admin.initialize_app(cred)
             print("✅ Firebase Admin connected.")
         else:
-            print(f"⚠️  WARNING: Firebase credentials file not found at {SERVICE_ACCOUNT_KEY}")
+            print(
+                f"⚠️  WARNING: Firebase credentials file not found at {SERVICE_ACCOUNT_KEY}")
             print("   The app will start but Firebase queries will fail.")
     db = firestore.client()
 except Exception as e:
@@ -414,7 +415,7 @@ def health_check():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug_mode = os.environ.get('FLASK_ENV') != 'production'
-    
+
     print("\n" + "="*60)
     print("🚀 Campus Guide Kiosk Starting Up")
     print("="*60)
@@ -426,5 +427,5 @@ if __name__ == '__main__':
     print(f"API Keys Configured: {len(API_KEYS)} key(s)")
     print(f"FAQs in Memory: {len(FAQ_STORE)}")
     print("="*60 + "\n")
-    
+
     app.run(host='0.0.0.0', port=port, debug=debug_mode, use_reloader=False)
