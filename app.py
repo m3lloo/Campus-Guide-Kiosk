@@ -72,9 +72,13 @@ try:
             cred = credentials.Certificate(SERVICE_ACCOUNT_KEY)
             firebase_admin.initialize_app(cred)
             print("✅ Firebase Admin connected.")
+        else:
+            print(f"⚠️  WARNING: Firebase credentials file not found at {SERVICE_ACCOUNT_KEY}")
+            print("   The app will start but Firebase queries will fail.")
     db = firestore.client()
 except Exception as e:
-    print(f"❌ Firebase connection failed: {e}")
+    print(f"⚠️  Firebase connection failed: {e}")
+    print("   The app will start but API calls will return errors.")
 
 # ---------------------------------------------------------------------------
 # In-Memory Embedding Store
@@ -408,4 +412,19 @@ def health_check():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+    port = int(os.environ.get('PORT', 5000))
+    debug_mode = os.environ.get('FLASK_ENV') != 'production'
+    
+    print("\n" + "="*60)
+    print("🚀 Campus Guide Kiosk Starting Up")
+    print("="*60)
+    print(f"Port: {port}")
+    print(f"Debug Mode: {debug_mode}")
+    print(f"Flask Env: {os.environ.get('FLASK_ENV', 'development')}")
+    print(f"Embedding Model Loaded: {EMBEDDING_MODEL is not None}")
+    print(f"Firebase Connected: {db is not None}")
+    print(f"API Keys Configured: {len(API_KEYS)} key(s)")
+    print(f"FAQs in Memory: {len(FAQ_STORE)}")
+    print("="*60 + "\n")
+    
+    app.run(host='0.0.0.0', port=port, debug=debug_mode, use_reloader=False)
