@@ -28,6 +28,10 @@ import nltk
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
 
+# Memory optimization for low-resource deployments
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+
 warnings.filterwarnings("ignore")
 load_dotenv()
 
