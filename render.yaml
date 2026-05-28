@@ -3,20 +3,20 @@ services:
     name: campus-guide-kiosk
     runtime: python
     pythonVersion: 3.11
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --workers 4 --bind 0.0.0.0:$PORT app:app
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: gunicorn --workers 3 --worker-class sync --bind 0.0.0.0:$PORT --timeout 120 app:app
     plan: free
     
     # Environment variables - set these in Render dashboard
     envVars:
       - key: FLASK_ENV
         value: production
-      - key: PYTHON_VERSION
-        value: 3.11.0
+      - key: PYTHONUNBUFFERED
+        value: 1
     
-    # Optional: Set up auto-deploy from GitHub
-    autoDeploy: true
+    # Set up auto-deploy from GitHub
+    autoDeploy: false
     
-    # Optional: Health check
+    # Health check
     healthCheckPath: /api/v1/health
     healthCheckInterval: 30
