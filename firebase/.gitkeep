@@ -1,0 +1,2 @@
+# This file ensures the firebase/ directory is tracked by git.
+# Place your firebase/campus_guide_kiosk.json here (add to .gitignore to prevent accidental commits).

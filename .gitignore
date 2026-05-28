@@ -1,0 +1,55 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Flask
+instance/
+.webassets-cache
+
+# Credentials & Secrets
+firebase/*.json
+!firebase/.gitkeep
+.api_usage.json
+
+# OS
+.DS_Store
+Thumbs.db
+.directory
+
+# Runtime/Cache
+*.log
+*.pot
+*.mo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE settings
+.vs/
+*.code-workspace

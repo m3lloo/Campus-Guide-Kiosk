@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Campus Guide Kiosk</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-keyboard/build/css/index.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body class="text-white overflow-hidden select-none" style="background-color: #121212;">
+
+    <!-- IDLE OVERLAY -->
+    <div id="idle-overlay"
+        class="fixed top-0 left-0 w-full h-full z-[200] flex items-center justify-center flex-col text-center transition-opacity duration-500 opacity-100 p-4"
+        style="background-color: #121212;" role="alert" aria-label="Idle overlay - Tap to continue">
+        <div class="absolute top-6 right-6 md:top-12 md:right-12 text-right" aria-live="polite">
+            <div id="splash-time" class="text-5xl md:text-8xl font-bold text-white mb-2"
+                style="text-shadow: 0 0 30px rgba(179, 16, 16, 0.4); font-family: 'Rajdhani', sans-serif;">--:--</div>
+            <div id="splash-date" class="text-xl md:text-4xl font-medium text-gray-300 tracking-wider">Loading...</div>
+        </div>
+        <i class="material-icons text-white text-8xl md:text-[10rem] mb-6 animate-pulse-subtle"
+            style="color: var(--primary-neon);" aria-hidden="true">touch_app</i>
+        <h1 class="text-4xl md:text-7xl font-extrabold mb-4" style="color: var(--secondary-neon);">Campus Guide</h1>
+        <p class="text-xl md:text-4xl text-gray-300 font-light">Tap anywhere to start</p>
+    </div>
+
+    <!-- MAIN CONTAINER -->
+    <div class="kiosk-container flex flex-col-reverse md:flex-row h-screen w-screen overflow-hidden">
+
+        <!-- NAVIGATION (Bottom on Mobile, Left on Desktop) -->
+        <nav class="nav-bar border-t md:border-t-0 md:border-r border-gray-700 shadow-xl z-50 flex flex-row md:flex-col h-16 md:h-full w-full md:w-32 flex-shrink-0 justify-around md:justify-start"
+            style="background-color: #121212;" role="navigation" aria-label="Main navigation">
+
+            <!-- Network Status -->
+            <div id="network-status"
+                class="hidden md:block w-full text-center py-4 px-1 leading-tight border-b border-gray-700 mt-2"
+                role="status" aria-live="polite">
+                <i class="material-icons text-3xl mb-1" style="color: var(--secondary-neon);"
+                    aria-hidden="true">signal_cellular_alt</i>
+                <span class="text-xs font-bold tracking-widest block text-gray-300">STATUS</span>
+            </div>
+
+            <!-- Nav Buttons -->
+            <div
+                class="flex flex-row md:flex-col gap-0 md:gap-2 w-full flex-grow justify-around md:justify-center items-center">
+                <button
+                    class="nav-button active flex flex-col items-center justify-center py-1 md:py-8 hover:bg-gray-800 transition-colors relative flex-1 h-full md:h-auto focus:outline-none focus:ring-2"
+                    style="--tw-ring-color: var(--primary-neon);" data-target="home-section" aria-label="Home"
+                    aria-current="page">
+                    <i class="material-icons text-2xl md:text-5xl mb-1" aria-hidden="true">home</i>
+                    <span class="text-[10px] md:text-xs font-bold tracking-widest">HOME</span>
+                </button>
+                <button
+                    class="nav-button flex flex-col items-center justify-center py-1 md:py-8 hover:bg-gray-800 transition-colors relative flex-1 h-full md:h-auto focus:outline-none focus:ring-2"
+                    style="--tw-ring-color: var(--primary-neon);" data-target="events-section" aria-label="Events">
+                    <i class="material-icons text-2xl md:text-5xl mb-1" aria-hidden="true">event</i>
+                    <span class="text-[10px] md:text-xs font-bold tracking-widest">EVENTS</span>
+                </button>
+                <button
+                    class="nav-button flex flex-col items-center justify-center py-1 md:py-8 hover:bg-gray-800 transition-colors relative flex-1 h-full md:h-auto focus:outline-none focus:ring-2"
+                    style="--tw-ring-color: var(--primary-neon);" data-target="ask-section" aria-label="Ask AI">
+                    <i class="material-icons text-2xl md:text-5xl mb-1" aria-hidden="true">chat</i>
+                    <span class="text-[10px] md:text-xs font-bold tracking-widest">ASK AI</span>
+                </button>
+                <button
+                    class="nav-button flex flex-col items-center justify-center py-1 md:py-8 hover:bg-gray-800 transition-colors relative flex-1 h-full md:h-auto focus:outline-none focus:ring-2"
+                    style="--tw-ring-color: var(--primary-neon);" data-target="map-section" aria-label="Map">
+                    <i class="material-icons text-2xl md:text-5xl mb-1" aria-hidden="true">map</i>
+                    <span class="text-[10px] md:text-xs font-bold tracking-widest">MAP</span>
+                </button>
+            </div>
+
+            <!-- DateTime -->
+            <div id="datetime"
+                class="hidden md:block w-full text-center text-xs font-bold text-gray-300 px-1 leading-tight pb-4"
+                role="status" aria-live="polite" aria-label="Current date and time">Loading...</div>
+        </nav>
+
+        <!-- DASHBOARD CONTENT -->
+        <div class="dashboard-content flex-1 overflow-y-auto relative pb-20 md:pb-6" style="background-color: #121212;"
+            id="dashboard-container">
+
+            <!-- HOME SECTION -->
+            <section id="home-section" class="view-section animate-fade-in p-3 md:p-6">
+                <header
+                    class="mb-3 md:mb-6 flex flex-col md:flex-row items-start md:items-end justify-between border-b border-gray-700 pb-2">
+                    <div class="mt-2 md:mt-0">
+                        <h1 class="font-extrabold text-3xl md:text-5xl" style="color: var(--secondary-neon);">Campus
+                            Guide</h1>
+                        <p class="text-white text-sm md:text-xl mt-1">Select a destination or ask a question.</p>
+                    </div>
+                </header>
+
+                <div class="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-8 content-start pt-2 px-1">
+                    <!-- Registrar -->
+                    <button
+                        class="quick-link-btn p-3 md:p-5 rounded-xl shadow-lg flex flex-col items-center justify-center h-32 md:h-52 gap-2 md:gap-4"
+                        style="background-color: #2D2D2D;" data-target="map-section" data-location="Registrar's Office">
+                        <i class="material-icons text-4xl md:text-6xl"
+                            style="color: var(--primary-neon);">account_balance</i>
+                        <span class="text-base md:text-2xl font-semibold text-center leading-tight">Registrar</span>
+                    </button>
+                    <!-- Events -->
+                    <button
+                        class="quick-link-btn p-3 md:p-5 rounded-xl shadow-lg flex flex-col items-center justify-center h-32 md:h-52 gap-2 md:gap-4"
+                        style="background-color: #2D2D2D;" data-target="events-section" data-query="">
+                        <i class="material-icons text-4xl md:text-6xl" style="color: var(--purple-neon);">event</i>
+                        <span class="text-base md:text-2xl font-semibold text-center leading-tight">Events</span>
+                    </button>
+                    <!-- Library -->
+                    <button
+                        class="quick-link-btn p-3 md:p-5 rounded-xl shadow-lg flex flex-col items-center justify-center h-32 md:h-52 gap-2 md:gap-4"
+                        style="background-color: #2D2D2D;" data-target="ask-section" data-query="Library Hours">
+                        <i class="material-icons text-4xl md:text-6xl"
+                            style="color: var(--secondary-neon);">local_library</i>
+                        <span class="text-base md:text-2xl font-semibold text-center leading-tight">Library</span>
+                    </button>
+                    <!-- Emergency — Crimson border -->
+                    <button
+                        class="quick-link-btn p-3 md:p-5 rounded-xl shadow-lg flex flex-col items-center justify-center h-32 md:h-52 gap-2 md:gap-4"
+                        style="background-color: #2D2D2D; border: 2px solid #B31010;" data-target="emergency">
+                        <i class="material-icons text-4xl md:text-6xl" style="color: #B31010;">emergency</i>
+                        <span class="text-base md:text-2xl font-semibold text-center leading-tight"
+                            style="color: #e05555;">Emergency</span>
+                    </button>
+                    <!-- Canteen -->
+                    <button
+                        class="quick-link-btn p-3 md:p-5 rounded-xl shadow-lg flex flex-col items-center justify-center h-32 md:h-52 gap-2 md:gap-4"
+                        style="background-color: #2D2D2D;" data-target="map-section"
+                        data-location="Multipurpose - Canteen - Ground Floor">
+                        <i class="material-icons text-4xl md:text-6xl"
+                            style="color: var(--secondary-neon);">restaurant</i>
+                        <span class="text-base md:text-2xl font-semibold text-center leading-tight">Canteen</span>
+                    </button>
+                    <!-- Admin -->
+                    <button
+                        class="quick-link-btn p-3 md:p-5 rounded-xl shadow-lg flex flex-col items-center justify-center h-32 md:h-52 gap-2 md:gap-4"
+                        style="background-color: #2D2D2D;" data-target="map-section" data-location="Admin Office">
+                        <i class="material-icons text-4xl md:text-6xl" style="color: var(--primary-neon);">work</i>
+                        <span class="text-base md:text-2xl font-semibold text-center leading-tight">Admin</span>
+                    </button>
+                </div>
+            </section>
+
+            <!-- EVENTS SECTION -->
+            <section id="events-section" class="view-section hidden p-3 md:p-6">
+                <header class="mb-4 flex items-end justify-start border-b border-gray-700 pb-2">
+                    <h1 class="font-extrabold text-2xl md:text-5xl" style="color: var(--purple-neon);"><i
+                            class="material-icons text-3xl md:text-5xl mr-2">event</i> Events</h1>
+                </header>
+                <div class="w-full overflow-x-auto whitespace-nowrap mb-6 pb-2 no-scrollbar" id="eventFilters"></div>
+                <div id="eventsList" class="flex flex-col gap-4 md:gap-6 flex-1 overflow-y-auto pr-2"></div>
+            </section>
+
+            <!-- ASK AI SECTION -->
+            <section id="ask-section" class="view-section hidden h-full flex flex-col p-3 md:p-6">
+                <header class="mb-3 flex items-end justify-start border-b border-gray-700 pb-2">
+                    <h1 class="font-extrabold text-2xl md:text-5xl" style="color: var(--primary-neon);"><i
+                            class="material-icons text-3xl md:text-5xl mr-2">chat</i> Guide AI</h1>
+                </header>
+
+                <div class="w-full mb-3 px-1">
+                    <label for="textQueryInput" class="block text-base md:text-2xl font-bold mb-2"
+                        style="color: var(--secondary-neon);">Ask the
+                        Campus Guide:</label>
+                    <div class="relative flex shadow-lg h-12 md:h-16">
+                        <input type="text" id="textQueryInput" placeholder="Enter question..."
+                            class="flex-1 px-4 text-base md:text-2xl border rounded-l-lg text-white outline-none current-input w-full"
+                            style="background-color: #2D2D2D; border-color: #4a4a4a;">
+                        <button id="textQuerySubmit"
+                            class="px-4 md:px-8 rounded-r-lg transition-colors flex items-center justify-center"
+                            style="background-color: var(--primary-neon);">
+                            <i class="material-icons text-white text-xl md:text-4xl">send</i>
+                        </button>
+                    </div>
+                    <p id="queryStatus" class="font-bold mt-2 text-xs md:text-xl" style="color: var(--purple-neon);">
+                        Ready to Answer</p>
+                </div>
+
+                <div id="askResponseWrapper" class="flex-1 min-h-0 px-1">
+                    <!-- border-left color is overridden to Circuit Green via CSS -->
+                    <div id="answerContent"
+                        class="h-full p-4 md:p-10 rounded-xl border-l-4 overflow-y-auto shadow-inner"
+                        style="background-color: #2D2D2D; border-left-color: var(--purple-neon);">
+                        <h4 class="text-gray-300 text-xs md:text-lg uppercase font-bold mb-2 tracking-widest">AI
+                            Assistant</h4>
+                        <p class="text-white text-lg md:text-4xl leading-relaxed font-light">Hello! Type your question
+                            above.</p>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- FULL SCREEN MAP WRAPPER -->
+    <div id="full-screen-map-wrapper" class="hidden fixed top-0 left-0 w-full h-[100dvh] z-[100] flex flex-col"
+        style="background-color: #121212;">
+        <section id="map-section" class="view-section flex flex-col h-full w-full p-4 md:p-6 animate-fade-in">
+
+            <header class="mb-2 flex items-center justify-between border-b border-gray-700 pb-2">
+                <h1 class="font-extrabold text-3xl md:text-5xl truncate" style="color: var(--secondary-neon);">
+                    <i class="material-icons text-3xl md:text-5xl mr-2 align-bottom">map</i>Map
+                </h1>
+                <button onclick="closeMap()"
+                    class="px-3 py-1 md:px-6 md:py-2 rounded-lg text-white font-bold text-sm md:text-xl flex items-center shadow-lg transition-colors"
+                    style="background-color: var(--primary-neon);">
+                    <i class="material-icons text-lg md:text-3xl mr-1">close</i> Close
+                </button>
+            </header>
+
+            <div class="flex w-full mb-3 mt-1 relative gap-2 h-10 md:h-16">
+                <input type="text" id="searchMap" placeholder="Search..." aria-label="Search for locations"
+                    class="flex-1 px-3 py-1 text-sm md:text-2xl border rounded-lg text-white outline-none current-input w-full"
+                    style="background-color: #2D2D2D; border-color: #4a4a4a;">
+
+                <button id="resetMapButton" onclick="window.resetMapView()"
+                    class="w-10 md:w-auto md:px-6 rounded-lg flex items-center justify-center"
+                    style="background-color: var(--purple-neon);">
+                    <i class="material-icons text-white text-lg md:text-4xl">refresh</i>
+                </button>
+                <button onclick="handleMapSearch(document.getElementById('searchMap').value)"
+                    class="w-10 md:w-auto md:px-10 rounded-lg flex items-center justify-center"
+                    style="background-color: var(--primary-neon);">
+                    <i class="material-icons text-white text-lg md:text-4xl">search</i>
+                </button>
+                <div id="autocomplete-list"
+                    class="absolute top-full left-0 right-0 z-10 border rounded-b-xl shadow-2xl overflow-hidden hidden"
+                    style="background-color: #2D2D2D; border-color: #4a4a4a;">
+                </div>
+            </div>
+
+            <!-- Map Placeholder -->
+            <div id="mapPlaceholder"
+                class="flex-1 rounded-xl border border-gray-700 shadow-2xl flex items-center justify-center relative overflow-hidden w-full mb-6 md:mb-0"
+                style="background-color: #2D2D2D;">
+                <div class="text-center text-gray-400">
+                    <i class="material-icons text-6xl md:text-9xl mb-4">map</i>
+                    <p class="text-lg md:text-3xl">Loading Map...</p>
+                </div>
+
+                <!-- Info Panel -->
+                <div id="infoPanel"
+                    class="hidden absolute bottom-0 left-0 right-0 md:top-10 md:right-10 md:left-auto md:bottom-auto w-full md:w-96 p-4 md:p-6 rounded-t-xl md:rounded-xl border-t-4 md:border-t-0 md:border-l-4 shadow-2xl transition-opacity duration-300 z-20"
+                    style="background-color: #2D2D2D; border-color: var(--purple-neon);">
+                    <h3 id="infoTitle" class="text-lg md:text-2xl font-bold mb-1" style="color: var(--purple-neon);">
+                        Location Info</h3>
+                    <p id="infoDetails" class="text-sm md:text-lg text-gray-300 mb-3">Details...</p>
+                    <button id="closeInfo" onclick="window.closeInfoPanel()"
+                        class="w-full py-2 md:py-3 rounded-lg text-white font-bold transition-colors text-sm md:text-base"
+                        style="background-color: var(--primary-neon);">
+                        Close
+                    </button>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <div id="alertContainer"
+        class="fixed top-4 right-4 z-[101] flex flex-col items-end pointer-events-none w-11/12 md:w-auto"></div>
+    <div id="virtual-keyboard" class="simple-keyboard"
+        style="display: none; position: fixed; bottom: 0; left: 0; width: 100vw; z-index: 102;"></div>
+
+    <script>
+        window.env = {
+            FIREBASE_API_KEY: "{{ fb_api_key }}",
+            FIREBASE_PROJECT_ID: "{{ fb_project_id }}",
+            FIREBASE_APP_ID: "{{ fb_app_id }}"
+        };
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/simple-keyboard/build/index.js"></script>
+    <script type="module" src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+
+</html>
