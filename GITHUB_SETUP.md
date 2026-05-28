@@ -168,36 +168,8 @@ cd CampusGuideKiosk
 
 ## Deployment Options
 
-### ⭐ Option 1: Render (RECOMMENDED)
-Best for Flask apps with ML models and persistent memory.
-
-**Features:**
-- ✅ Python-optimized
-- ✅ $7/month for always-on service
-- ✅ Free tier available
-- ✅ Auto-deploy from GitHub
-- ✅ Built-in monitoring
-
-**Quick Start:**
-1. Go to [render.com](https://render.com)
-2. Sign up with GitHub
-3. Connect `CampusGuideKiosk` repository
-4. Set environment variables
-5. Deploy!
-
-**Full Guide:** See [RENDER_DEPLOYMENT.md](RENDER_DEPLOYMENT.md)
-
-```bash
-# Or deploy via CLI:
-npm i -g @render/cli
-render login
-render init
-```
-
----
-
-### Option 2: PythonAnywhere (Good for educational projects)
-Simplest option - no CLI needed.
+### Option 1: PythonAnywhere (Simple & Recommended for this project)
+Best for educational/testing environments without complex DevOps.
 
 1. Sign up at [pythonanywhere.com](https://www.pythonanywhere.com)
 2. Create new web app (Flask)
@@ -209,35 +181,32 @@ Simplest option - no CLI needed.
 
 ---
 
-### Option 3: Heroku (Legacy - Free tier removed)
-```bash
-# Note: Heroku removed free tier. Now starts at $7/month like Render
-# Use Render instead (simpler setup)
+### Option 2: Heroku (Legacy - Not Recommended)
+Heroku removed free tier. Now costs $7/month.
 
+```bash
 heroku login
 heroku create your-app-name
-echo "web: gunicorn --workers 4 app:app" > Procfile
+echo "web: flask run" > Procfile
 heroku config:set FIREBASE_API_KEY=your_key
 git push heroku main
 ```
 
 ---
 
-### Option 4: Docker + Cloud Run (Google Cloud)
-For advanced users wanting serverless + scaling.
+### Option 3: DigitalOcean / Linode (VPS)
+For full control and moderate traffic.
 
-See the Dockerfile template in README.md
-
-**Cost:** Pay-per-use, free tier available ($5 credit/month)
+**Cost:** $5-20/month depending on specs
 
 ---
 
-### Option 5: Your Own Server
-Use `gunicorn` with a reverse proxy (nginx) on a VPS.
+### Option 4: Docker + Cloud Run (Google Cloud)
+For advanced users wanting serverless auto-scaling.
 
-**Providers:** DigitalOcean, Linode, AWS EC2
+See the Dockerfile template in README.md
 
-**Cost:** $5-20/month depending on server size
+**Cost:** Pay-per-use, free tier available
 
 ---
 
