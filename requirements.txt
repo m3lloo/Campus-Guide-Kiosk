@@ -1,23 +1,36 @@
 # Web Framework
-Flask>=3.0.0
-python-dotenv>=1.0.0
+Flask==3.0.0
+python-dotenv==1.0.0
+Flask-Limiter==3.5.0
 
 # AI & ML
-google-generativeai>=0.8.0
-sentence-transformers>=5.0.0
-torch>=2.0.0
-numpy>=1.24.0
+google-generativeai==0.8.0
+sentence-transformers==5.0.0
+torch==2.0.0
+numpy==1.24.0
 
 # Firebase
-firebase-admin>=7.0.0
-google-cloud-firestore>=2.0.0
+firebase-admin==7.0.0
+google-cloud-firestore==2.0.0
 
 # NLP
-nltk>=3.8.0
+nltk==3.8.0
 
 # Production deployment
-gunicorn>=21.0.0
+gunicorn==21.0.0
 
-# Development (optional)
-pytest>=7.0.0
-black>=23.0.0
+# API Documentation
+flask-restx==0.5.1
+
+# Development & Testing
+pytest==7.0.0
+pytest-cov==4.0.0
+black==23.0.0
+pylint==2.17.0
+flake8==6.0.0
+
+# Optional: Error tracking
+# sentry-sdk==1.40.0
+
+# Optional: Database migrations
+# Alembic==1.12.0

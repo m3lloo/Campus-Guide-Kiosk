@@ -1,0 +1,178 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11']
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Lint with pylint
+      continue-on-error: true
+      run: |
+        pip install pylint
+        pylint app.py config.py error_handlers.py logging_config.py --disable=C0114,C0115,C0116 || true
+    
+    - name: Format check with black
+      continue-on-error: true
+      run: |
+        pip install black
+        black --check --diff . || true
+    
+    - name: Run tests with pytest
+      run: |
+        pytest tests/ -v --cov=. --cov-report=xml
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        files: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+
+  security:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Run Bandit security check
+      continue-on-error: true
+      run: |
+        pip install bandit
+        bandit -r . -ll || true
+    
+    - name: Check for secrets
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: ${{ github.event.repository.default_branch }}
+        head: HEAD
+        extra_args: --debug
+
+  build:
+    needs: [test, security]
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Build Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: false
+        tags: campus-guide-kiosk:${{ github.sha }}
+        cache-from: type=registry,ref=campus-guide-kiosk:latest
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Upload Trivy results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  deploy-staging:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Deploy to staging
+      env:
+        DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+        DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      run: |
+        mkdir -p ~/.ssh
+        echo "$DEPLOY_KEY" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H $DEPLOY_HOST >> ~/.ssh/known_hosts
+        
+        ssh $DEPLOY_USER@$DEPLOY_HOST << 'EOF'
+          cd /app/campus-guide-kiosk
+          git pull origin develop
+          docker-compose -f docker-compose.yml down
+          docker-compose -f docker-compose.yml pull
+          docker-compose -f docker-compose.yml up -d
+          docker-compose exec -T web python -m pytest tests/
+        EOF
+
+  deploy-production:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Deploy to production
+      env:
+        DEPLOY_KEY: ${{ secrets.PROD_DEPLOY_KEY }}
+        DEPLOY_HOST: ${{ secrets.PROD_DEPLOY_HOST }}
+        DEPLOY_USER: ${{ secrets.PROD_DEPLOY_USER }}
+      run: |
+        mkdir -p ~/.ssh
+        echo "$DEPLOY_KEY" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H $DEPLOY_HOST >> ~/.ssh/known_hosts
+        
+        ssh $DEPLOY_USER@$DEPLOY_HOST << 'EOF'
+          cd /app/campus-guide-kiosk
+          git pull origin main
+          docker-compose -f docker-compose.yml down
+          docker-compose -f docker-compose.yml pull
+          docker-compose -f docker-compose.yml up -d
+          docker-compose exec -T web python -m pytest tests/
+          curl -f http://localhost:5000/api/v1/health || exit 1
+        EOF
+    
+    - name: Create GitHub Release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ github.run_number }}
+        release_name: Release ${{ github.run_number }}
+        body: Automated production release
+        draft: false
+        prerelease: false

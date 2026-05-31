@@ -17,20 +17,26 @@ A Flask-based interactive kiosk application that provides campus information and
 ```
 .
 ├── app.py                  # Main Flask application
+├── config.py               # Configuration management
+├── error_handlers.py       # Error handling & validation
+├── logging_config.py       # Logging setup
 ├── index.py                # Admin tool for managing FAQ data
 ├── requirements.txt        # Python dependencies
+├── pytest.ini              # Test configuration
 ├── .env                    # Environment variables (create from .env.example)
 ├── firebase/
 │   └── campus_guide_kiosk.json  # Firebase credentials
-├── routes/
-│   └── v1/                 # API v1 endpoints
 ├── static/
 │   ├── script.js           # Frontend JavaScript
 │   ├── style.css           # Frontend styling
 │   └── unity/              # Unity WebGL build files
 ├── templates/
 │   └── index.html          # Main HTML template
+├── tests/                  # Automated test suite
 ├── data/                   # Data storage directory
+├── logs/                   # Application logs
+├── Dockerfile              # Docker container setup
+├── docker-compose.yml      # Docker composition for deployment
 └── venv/                   # Virtual environment (ignored in git)
 ```
 
@@ -95,13 +101,30 @@ Ask the kiosk a question about campus facilities or procedures.
 }
 ```
 
-**Response:**
+**Response (Success):**
 ```json
 {
-  "response": "The registrar is located in Building A, Room 101...",
-  "success": true,
-  "match_score": "0.87",
-  "suggested_questions": ["What are the registrar hours?", "How do I enroll?"]
+  "status": "success",
+  "message": "Query processed successfully",
+  "data": {
+    "response": "The registrar is located in Building A, Room 101...",
+    "match_score": "0.87",
+    "suggested_questions": ["What are the registrar hours?", "How do I enroll?"]
+  }
+}
+```
+
+**Response (Low Confidence):**
+When match_score < 0.70, suggested questions are provided:
+```json
+{
+  "status": "success",
+  "message": "Query processed successfully",
+  "data": {
+    "response": "Possible answer...",
+    "match_score": "0.65",
+    "suggested_questions": ["Related Question 1", "Related Question 2"]
+  }
 }
 ```
 
@@ -111,11 +134,15 @@ Health check endpoint.
 **Response:**
 ```json
 {
-  "status": "ok",
-  "faq_count": 42,
-  "model_loaded": true,
-  "db_connected": true,
-  "api_keys_loaded": 1
+  "status": "success",
+  "message": "System is healthy",
+  "data": {
+    "status": "healthy",
+    "faq_count": 42,
+    "model_loaded": true,
+    "db_connected": true,
+    "api_keys_loaded": 1
+  }
 }
 ```
 
@@ -151,24 +178,36 @@ TOP_K = 3                     # Number of results to return
 
 ## Deployment
 
+### Local Development
+```bash
+python app.py
+```
+
 ### Using Gunicorn (Production)
 ```bash
-gunicorn --workers 4 --bind 0.0.0.0:5000 app:app
+gunicorn --workers 4 --bind 0.0.0.0:5000 --timeout 120 app:app
 ```
 
-### Using Docker (Optional)
-```dockerfile
-FROM python:3.11-slim
+### Using Docker (Recommended)
+The project includes a multi-stage Dockerfile optimized for production:
 
-WORKDIR /app
+```bash
+# Build and run with Docker Compose
+docker-compose up -d
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-CMD ["gunicorn", "--workers", "4", "--bind", "0.0.0.0:5000", "app:app"]
+# Or build manually
+docker build -t campus-guide-kiosk .
+docker run -p 5000:5000 --env-file .env campus-guide-kiosk
 ```
+
+Docker Compose handles:
+- Container orchestration
+- Environment variables from `.env`
+- Volume mapping for Firebase credentials and logs
+- Health checks
+- Automatic restart policy
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions.
 
 ## Troubleshooting
 
@@ -205,9 +244,29 @@ See [requirements.txt](requirements.txt) for full list. Key packages:
 
 [Add your license here]
 
+## Documentation
+
+For more detailed information, see:
+- [API Documentation](API.md) - Complete API reference
+- [Security Guidelines](SECURITY.md) - Security best practices and configurations
+- [Deployment Guide](DEPLOYMENT.md) - Detailed deployment instructions
+- [Contributing Guidelines](CONTRIBUTING.md) - How to contribute to this project
+
+## Testing
+
+Run the automated test suite:
+```bash
+pytest
+```
+
+Tests include:
+- Unit tests for error handlers and validation
+- Integration tests for API routes
+- Security tests for input validation
+
 ## Contributing
 
-Pull requests are welcome. For major changes, please open an issue first to discuss.
+Pull requests are welcome. For major changes, please open an issue first to discuss. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## Support
 
@@ -215,5 +274,6 @@ For issues or questions, please open a GitHub issue.
 
 ---
 
-**Last Updated**: May 2026  
-**Version**: 1.0.0
+**Last Updated**: May 31, 2026  
+**Version**: 1.1.0  
+**Status**: Production-Ready

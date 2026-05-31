@@ -9,6 +9,8 @@ Key improvements over original:
   - Real API key rotation with exponential backoff on ResourceExhausted
   - Embedding context built identically to admin_tool.py (same vector space)
   - Clean None-safety throughout
+  - Centralized logging and error handling
+  - Input validation and security features
 """
 
 import warnings
@@ -20,33 +22,54 @@ from functools import lru_cache
 from flask import Flask, jsonify, request, render_template
 import google.generativeai as genai
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
-from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer, util
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import firebase_admin
 from firebase_admin import credentials, firestore
 import nltk
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
+from sentence_transformers import SentenceTransformer
+
+# Import custom modules
+from config import config
+from logging_config import logger, log_api_call, log_error
+from error_handlers import (
+    APIError, ValidationError, InternalServerError as InternalServerErrorCustom,
+    sanitize_input, validate_api_request, validate_query, create_success_response, create_error_response
+)
 
 # Memory optimization for low-resource deployments
 os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
 
 warnings.filterwarnings("ignore")
-load_dotenv()
 
 app = Flask(__name__)
+
+# Rate limiting setup
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=[
+        f"{config.rate_limit.requests_per_minute}/minute",
+        f"{config.rate_limit.requests_per_hour}/hour"
+    ] if config.rate_limit.enabled else []
+)
+
+logger.info(
+    f"[START] Campus Guide Kiosk starting in {config.environment} mode")
 
 # ---------------------------------------------------------------------------
 # NLTK Setup
 # ---------------------------------------------------------------------------
-print("⏳ Checking NLTK resources...")
+logger.info("[LOADING] Checking NLTK resources...")
 for resource, path in [('corpora/stopwords', 'stopwords'), ('tokenizers/punkt', 'punkt')]:
     try:
         nltk.data.find(resource)
     except LookupError:
         nltk.download(path, quiet=True)
-print("✅ NLTK ready.")
+logger.info("[OK] NLTK ready.")
 
 stemmer = PorterStemmer()
 STOP_WORDS = set(stopwords.words('english'))
@@ -55,19 +78,22 @@ STOP_WORDS = set(stopwords.words('english'))
 # Embedding Model
 # ---------------------------------------------------------------------------
 EMBEDDING_MODEL = None
-print("⏳ Loading Embedding Model...")
+logger.info("[LOADING] Loading Embedding Model...")
 try:
-    EMBEDDING_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
-    print("✅ Embedding Model loaded.")
+    EMBEDDING_MODEL = SentenceTransformer(config.embedding.model_name)
+    logger.info(
+        f"[OK] Embedding Model '{config.embedding.model_name}' loaded.")
 except Exception as e:
-    print(f"❌ FATAL: Error loading Embedding Model: {e}")
+    log_error('ModelLoadError', f'Failed to load embedding model: {e}')
+    logger.critical("❌ FATAL: Embedding Model failed to load")
 
 # ---------------------------------------------------------------------------
 # Firebase Setup
 # ---------------------------------------------------------------------------
-SERVICE_ACCOUNT_KEY = "firebase/campus_guide_kiosk.json"
-FAQ_COLLECTION = 'faqs'           # Aligned with admin_tool.py
-EVENTS_COLLECTION = 'events'
+SERVICE_ACCOUNT_KEY = config.firebase.service_account_key
+FAQ_COLLECTION = config.firebase.faq_collection
+EVENTS_COLLECTION = config.firebase.events_collection
+QUERY_LOGS_COLLECTION = config.firebase.query_logs_collection
 
 db = None
 try:
@@ -75,15 +101,16 @@ try:
         if os.path.exists(SERVICE_ACCOUNT_KEY):
             cred = credentials.Certificate(SERVICE_ACCOUNT_KEY)
             firebase_admin.initialize_app(cred)
-            print("✅ Firebase Admin connected.")
+            logger.info("[OK] Firebase Admin connected.")
         else:
-            print(
-                f"⚠️  WARNING: Firebase credentials file not found at {SERVICE_ACCOUNT_KEY}")
-            print("   The app will start but Firebase queries will fail.")
+            logger.warning(
+                f"Firebase credentials file not found at {SERVICE_ACCOUNT_KEY}")
+            logger.warning(
+                "The app will start but Firebase queries will fail.")
     db = firestore.client()
 except Exception as e:
-    print(f"⚠️  Firebase connection failed: {e}")
-    print("   The app will start but API calls will return errors.")
+    log_error('FirebaseError', f'Firebase connection failed: {e}')
+    logger.warning("The app will start but API calls will return errors.")
 
 # ---------------------------------------------------------------------------
 # In-Memory Embedding Store
@@ -120,14 +147,18 @@ def load_faq_store():
     global FAQ_STORE, EMBEDDING_MATRIX
 
     if db is None or EMBEDDING_MODEL is None:
-        print("⚠️  Skipping FAQ store load (db or model unavailable).")
+        logger.warning("Skipping FAQ store load (db or model unavailable).")
         return
 
-    print("⏳ Loading FAQ store into memory...")
-    docs = list(db.collection(FAQ_COLLECTION).stream())
+    logger.info("[LOADING] Loading FAQ store into memory...")
+    try:
+        docs = list(db.collection(FAQ_COLLECTION).stream())
+    except Exception as e:
+        log_error('FirestoreError', f'Failed to load FAQs: {e}')
+        return
 
     if not docs:
-        print("⚠️  No FAQ documents found.")
+        logger.warning("No FAQ documents found.")
         FAQ_STORE = []
         EMBEDDING_MATRIX = None
         return
@@ -136,31 +167,35 @@ def load_faq_store():
     vectors = []
 
     for doc in docs:
-        data = doc.to_dict()
-        emb = data.get('embedding')
-        if emb is None:
-            # Document has no embedding — skip (shouldn't happen with admin_tool)
-            print(f"⚠️  FAQ {doc.id} has no embedding, skipping.")
-            continue
+        try:
+            data = doc.to_dict()
+            emb = data.get('embedding')
+            if emb is None:
+                logger.warning(f"FAQ {doc.id} has no embedding, skipping.")
+                continue
 
-        store.append({
-            'id': doc.id,
-            'answer': data.get('answer', ''),
-            'category': data.get('category', 'general'),
-            'keywords': set(data.get('keywords', [])),
-            'generated_questions': data.get('generated_questions', []),
-        })
-        vectors.append(np.array(emb, dtype=np.float32))
+            store.append({
+                'id': doc.id,
+                'answer': data.get('answer', ''),
+                'category': data.get('category', 'general'),
+                'keywords': set(data.get('keywords', [])),
+                'generated_questions': data.get('generated_questions', []),
+            })
+            vectors.append(np.array(emb, dtype=np.float32))
+        except Exception as e:
+            log_error('FAQParseError', f'Error parsing FAQ {doc.id}: {e}')
+            continue
 
     if not vectors:
         FAQ_STORE = []
         EMBEDDING_MATRIX = None
-        print("⚠️  No embeddable FAQs found.")
+        logger.warning("No embeddable FAQs found.")
         return
 
     FAQ_STORE = store
     EMBEDDING_MATRIX = np.vstack(vectors)   # shape: (N, 384)
-    print(f"✅ FAQ store loaded: {len(FAQ_STORE)} documents.")
+    logger.info(
+        f"[OK] FAQ store loaded: {len(FAQ_STORE)} documents, {EMBEDDING_MATRIX.shape[1]} dimensions.")
 
 
 # Load at startup
@@ -169,13 +204,10 @@ load_faq_store()
 # ---------------------------------------------------------------------------
 # Gemini API — key rotation with exponential backoff
 # ---------------------------------------------------------------------------
-_RAW_KEYS = [
-    os.environ.get(f"API_KEY_{i}") for i in range(1, 6)
-]
-API_KEYS = [k for k in _RAW_KEYS if k]
+API_KEYS = config.gemini.api_keys
 
 if not API_KEYS:
-    print("⚠️  No Gemini API keys found. AI responses will be disabled.")
+    logger.warning("No Gemini API keys found. AI responses will be disabled.")
 
 SYSTEM_INSTRUCTION = (
     "You are a helpful Campus Guide Kiosk assistant. "
@@ -197,6 +229,7 @@ def get_gemini_response(prompt: str) -> str:
     global _current_key_index
 
     if not API_KEYS:
+        logger.warning("Gemini: No API keys available")
         return "AI service is currently offline."
 
     attempts = len(API_KEYS)
@@ -205,27 +238,31 @@ def get_gemini_response(prompt: str) -> str:
         try:
             genai.configure(api_key=API_KEYS[key_index])
             model = genai.GenerativeModel(
-                'gemini-2.5-flash',
+                config.gemini.model,
                 system_instruction=SYSTEM_INSTRUCTION
             )
-            response = model.generate_content(prompt)
+            response = model.generate_content(
+                prompt, request_options={"timeout": config.gemini.timeout})
             _current_key_index = key_index   # remember the working key
+            logger.debug(
+                f"Gemini response generated successfully with key {key_index}")
             return response.text.strip()
 
         except ResourceExhausted:
-            print(f"⚠️  API key [{key_index}] exhausted, rotating...")
+            logger.warning(f"API key [{key_index}] exhausted, rotating...")
             time.sleep(0.5 * (attempt + 1))   # 0.5s, 1.0s, 1.5s ...
             continue
 
         except InternalServerError as e:
-            print(f"⚠️  Gemini InternalServerError: {e}")
+            logger.warning(f"Gemini InternalServerError: {e}")
             return "I'm having trouble connecting right now. Please try again."
 
         except Exception as e:
-            print(f"❌ Gemini Error: {e}")
+            log_error('GeminiError', f'Gemini error: {e}')
             return "I apologize, I am having trouble connecting to the AI right now."
 
     # All keys exhausted
+    logger.error("All Gemini API keys exhausted")
     _current_key_index = (_current_key_index + 1) % len(API_KEYS)
     return "All AI service slots are currently busy. Please try again shortly."
 
@@ -235,10 +272,15 @@ def get_gemini_response(prompt: str) -> str:
 
 
 def get_query_keywords(text: str) -> set:
+    """Extract and stem keywords from text."""
     if not text:
         return set()
-    tokens = nltk.word_tokenize(text.lower())
-    return {stemmer.stem(w) for w in tokens if w.isalnum() and w not in STOP_WORDS}
+    try:
+        tokens = nltk.word_tokenize(text.lower())
+        return {stemmer.stem(w) for w in tokens if w.isalnum() and w not in STOP_WORDS}
+    except Exception as e:
+        logger.warning(f"Error extracting keywords: {e}")
+        return set()
 
 # ---------------------------------------------------------------------------
 # Core vectorized search
@@ -247,7 +289,7 @@ def get_query_keywords(text: str) -> set:
 
 # Score thresholds — easier to tune in one place
 RESULT_MIN_SCORE = 0.35      # minimum to appear in results
-ANSWER_MIN_SCORE = 0.45      # minimum to give an AI answer
+ANSWER_MIN_SCORE = config.app.answer_min_score      # minimum to give an AI answer
 KEYWORD_BOOST = 0.12      # added per keyword overlap hit
 TOP_K = 3         # number of candidates to return
 
@@ -259,45 +301,53 @@ def search_faqs(user_query: str) -> list:
     Each result: { answer, category, generated_questions, score }
     """
     if EMBEDDING_MATRIX is None or not FAQ_STORE:
+        logger.warning(
+            "Search attempted but FAQ store is empty or embedding matrix not loaded")
         return []
 
-    # Encode the raw query (same model as admin_tool, no context wrapper needed
-    # for the query side — asymmetric retrieval is fine with MiniLM)
-    query_vec = EMBEDDING_MODEL.encode(user_query, convert_to_tensor=False)
-    query_vec = np.array(query_vec, dtype=np.float32)
+    try:
+        # Encode the raw query (same model as admin_tool, no context wrapper needed
+        # for the query side — asymmetric retrieval is fine with MiniLM)
+        query_vec = EMBEDDING_MODEL.encode(user_query, convert_to_tensor=False)
+        query_vec = np.array(query_vec, dtype=np.float32)
 
-    # Single vectorized cosine similarity  (N,) in one call
-    norms = np.linalg.norm(EMBEDDING_MATRIX, axis=1) * \
-        np.linalg.norm(query_vec)
-    norms = np.where(norms == 0, 1e-9, norms)
-    scores = EMBEDDING_MATRIX.dot(query_vec) / norms   # shape: (N,)
+        # Single vectorized cosine similarity  (N,) in one call
+        norms = np.linalg.norm(EMBEDDING_MATRIX, axis=1) * \
+            np.linalg.norm(query_vec)
+        norms = np.where(norms == 0, 1e-9, norms)
+        scores = EMBEDDING_MATRIX.dot(query_vec) / norms   # shape: (N,)
 
-    # Keyword boost — vectorized via list comprehension (fast enough for <10k docs)
-    query_kw = get_query_keywords(user_query)
-    boosts = np.array([
-        KEYWORD_BOOST * min(len(query_kw & faq['keywords']), 3)
-        for faq in FAQ_STORE
-    ], dtype=np.float32)
-    scores = scores + boosts
+        # Keyword boost — vectorized via list comprehension (fast enough for <10k docs)
+        query_kw = get_query_keywords(user_query)
+        boosts = np.array([
+            KEYWORD_BOOST * min(len(query_kw & faq['keywords']), 3)
+            for faq in FAQ_STORE
+        ], dtype=np.float32)
+        scores = scores + boosts
 
-    # Filter and sort
-    above_threshold = np.where(scores >= RESULT_MIN_SCORE)[0]
-    if len(above_threshold) == 0:
+        # Filter and sort
+        above_threshold = np.where(scores >= RESULT_MIN_SCORE)[0]
+        if len(above_threshold) == 0:
+            logger.debug(
+                f"No FAQ matches above threshold for query: {user_query[:50]}")
+            return []
+
+        top_indices = above_threshold[np.argsort(
+            scores[above_threshold])[::-1][:TOP_K]]
+
+        results = []
+        for idx in top_indices:
+            faq = FAQ_STORE[idx]
+            results.append({
+                'answer': faq['answer'],
+                'category': faq['category'],
+                'generated_questions': faq['generated_questions'],
+                'score': float(scores[idx]),
+            })
+        return results
+    except Exception as e:
+        log_error('SearchError', f'Search failed: {e}')
         return []
-
-    top_indices = above_threshold[np.argsort(
-        scores[above_threshold])[::-1][:TOP_K]]
-
-    results = []
-    for idx in top_indices:
-        faq = FAQ_STORE[idx]
-        results.append({
-            'answer':               faq['answer'],
-            'category':             faq['category'],
-            'generated_questions':  faq['generated_questions'],
-            'score':                float(scores[idx]),
-        })
-    return results
 
 # ---------------------------------------------------------------------------
 # LRU cache — skip search + AI for repeated identical queries
@@ -305,7 +355,7 @@ def search_faqs(user_query: str) -> list:
 # ---------------------------------------------------------------------------
 
 
-@lru_cache(maxsize=128)
+@lru_cache(maxsize=config.app.cache_max_size)
 def cached_search_and_respond(user_query: str):
     """
     Cached wrapper around search + Gemini call.
@@ -345,46 +395,113 @@ def cached_search_and_respond(user_query: str):
 # Routes
 # ---------------------------------------------------------------------------
 
+# Error handlers
+
+
+@app.errorhandler(APIError)
+def handle_api_error(error):
+    """Handle custom API errors."""
+    response, status_code = create_error_response(
+        error.error_type, error.message, error.status_code)
+    return jsonify(response), status_code
+
+
+@app.errorhandler(400)
+def handle_bad_request(error):
+    """Handle bad request errors."""
+    response, status_code = create_error_response(
+        'BadRequest', 'Invalid request format')
+    return jsonify(response), status_code
+
+
+@app.errorhandler(404)
+def handle_not_found(error):
+    """Handle 404 errors."""
+    response, status_code = create_error_response(
+        'NotFound', 'Resource not found', 404)
+    return jsonify(response), status_code
+
+
+@app.errorhandler(500)
+def handle_internal_error(error):
+    """Handle internal server errors."""
+    log_error('InternalServerError', str(error))
+    response, status_code = create_error_response(
+        'InternalServerError', 'An unexpected error occurred')
+    return jsonify(response), status_code
+
 
 @app.route('/')
 def index():
-    return render_template(
-        'index.html',
-        fb_api_key=os.getenv("FIREBASE_API_KEY"),
-        fb_project_id=os.getenv("FIREBASE_PROJECT_ID"),
-        fb_app_id=os.getenv("FIREBASE_APP_ID"),
-    )
+    """Serve the main HTML template."""
+    try:
+        return render_template(
+            'index.html',
+            fb_api_key=os.getenv("FIREBASE_API_KEY"),
+            fb_project_id=os.getenv("FIREBASE_PROJECT_ID"),
+            fb_app_id=os.getenv("FIREBASE_APP_ID"),
+        )
+    except Exception as e:
+        log_error('TemplateError', f'Failed to render index template: {e}')
+        return jsonify(create_error_response('TemplateError', 'Failed to load page')), 500
 
 
 @app.route('/api/v1/ask', methods=['POST'])
+@limiter.limit(f"{config.rate_limit.requests_per_minute}/minute")
 def handle_ask_query():
+    """Handle user questions via semantic search + AI."""
+    start_time = time.time()
     try:
         data = request.get_json(silent=True)
-        if not data or 'query' not in data:
-            return jsonify({"response": "Invalid request.", "success": False}), 400
+        if not data:
+            raise ValidationError("Request body must be valid JSON")
 
-        user_query = data['query'].strip()
-        if not user_query:
-            return jsonify({"response": "Empty query.", "success": False}), 400
+        # Validate required fields
+        validate_api_request(data, ['query'])
 
-        print(f"\n🗣️  User: {user_query}")
+        # Sanitize and validate input
+        user_query = validate_query(
+            data['query'], config.security.max_query_length)
 
+        logger.info(f"🗣️  User query: {user_query[:50]}...")
+
+        # Log query to analytics if enabled
+        if os.getenv('ENABLE_ANALYTICS', 'True').lower() == 'true':
+            try:
+                if db:
+                    db.collection(QUERY_LOGS_COLLECTION).document().set({
+                        'query': user_query,
+                        'timestamp': firestore.SERVER_TIMESTAMP,
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to log query to analytics: {e}")
+
+        # Get response
         response_text, suggested_questions, match_score = cached_search_and_respond(
             user_query)
 
-        print(
-            f"✅ Score: {match_score:.2f} | Response: {response_text[:60]}...")
+        duration_ms = (time.time() - start_time) * 1000
+        log_api_call('/api/v1/ask', 'POST', 200, duration_ms, user_query)
 
-        return jsonify({
-            "response":             response_text,
-            "success":              True,
-            "match_score":          f"{match_score:.2f}",
-            "suggested_questions":  suggested_questions,
-        })
+        logger.info(
+            f"[OK] Response sent - Score: {match_score:.2f} - Duration: {duration_ms:.1f}ms")
 
-    except Exception:
-        traceback.print_exc()
-        return jsonify({"response": "System error. Please try again.", "success": False}), 500
+        return jsonify(create_success_response({
+            "response": response_text,
+            "match_score": f"{match_score:.2f}",
+            "suggested_questions": suggested_questions,
+        }, "Query processed successfully")), 200
+
+    except ValidationError as e:
+        duration_ms = (time.time() - start_time) * 1000
+        log_api_call('/api/v1/ask', 'POST', 400, duration_ms)
+        return jsonify(create_error_response('ValidationError', str(e))), 400
+
+    except Exception as e:
+        duration_ms = (time.time() - start_time) * 1000
+        log_api_call('/api/v1/ask', 'POST', 500, duration_ms)
+        log_error('QueryError', f'Query processing failed: {e}')
+        return jsonify(create_error_response('InternalServerError', 'Failed to process query')), 500
 
 
 @app.route('/api/v1/reload', methods=['POST'])
@@ -394,42 +511,172 @@ def reload_faq_store():
     to refresh the in-memory store without restarting Flask.
     Protect this with a secret header in production.
     """
-    secret = request.headers.get('X-Reload-Secret', '')
-    expected = os.getenv('RELOAD_SECRET', '')
-    if expected and secret != expected:
-        return jsonify({"success": False, "message": "Unauthorized"}), 401
+    try:
+        secret = request.headers.get('X-Reload-Secret', '')
+        expected = os.getenv('RELOAD_SECRET', '')
+        if expected and secret != expected:
+            log_error(
+                'Unauthorized', f'Reload attempted with invalid secret from {request.remote_addr}')
+            return jsonify(create_error_response('Unauthorized', 'Invalid credentials', 401)), 401
 
-    # Invalidate LRU cache so stale answers aren't served
-    cached_search_and_respond.cache_clear()
-    load_faq_store()
-    return jsonify({"success": True, "faq_count": len(FAQ_STORE)})
+        logger.info("📤 Reloading FAQ store...")
+        # Invalidate LRU cache so stale answers aren't served
+        cached_search_and_respond.cache_clear()
+        load_faq_store()
+        logger.info(f"✅ FAQ store reloaded: {len(FAQ_STORE)} documents")
+
+        return jsonify(create_success_response({
+            "faq_count": len(FAQ_STORE),
+            "embedding_matrix_shape": EMBEDDING_MATRIX.shape if EMBEDDING_MATRIX is not None else None
+        }, "FAQ store reloaded successfully")), 200
+
+    except Exception as e:
+        log_error('ReloadError', f'Failed to reload FAQ store: {e}')
+        return jsonify(create_error_response('InternalServerError', 'Failed to reload FAQ store')), 500
 
 
 @app.route('/api/v1/health', methods=['GET'])
 def health_check():
-    return jsonify({
-        "status":          "ok",
-        "faq_count":       len(FAQ_STORE),
-        "model_loaded":    EMBEDDING_MODEL is not None,
-        "db_connected":    db is not None,
-        "api_keys_loaded": len(API_KEYS),
-    })
+    """Comprehensive health check endpoint."""
+    try:
+        firebase_status = 'connected' if db is not None else 'disconnected'
+        embeddings_status = 'loaded' if EMBEDDING_MODEL is not None else 'not_loaded'
+
+        health_data = {
+            "status": "healthy",
+            "environment": config.environment,
+            "faq_count": len(FAQ_STORE),
+            "embedding_matrix_shape": list(EMBEDDING_MATRIX.shape) if EMBEDDING_MATRIX is not None else None,
+            "model_loaded": EMBEDDING_MODEL is not None,
+            "model_name": config.embedding.model_name,
+            "firebase_status": firebase_status,
+            "api_keys_configured": len(API_KEYS),
+            "cache_info": {
+                "hits": cached_search_and_respond.cache_info().hits,
+                "misses": cached_search_and_respond.cache_info().misses,
+                "currsize": cached_search_and_respond.cache_info().currsize,
+            },
+            "rate_limiting_enabled": config.rate_limit.enabled,
+            "log_level": config.app.log_level,
+        }
+
+        logger.debug(f"Health check: {health_data}")
+        return jsonify(create_success_response(health_data, "System is healthy")), 200
+
+    except Exception as e:
+        log_error('HealthCheckError', f'Health check failed: {e}')
+        return jsonify(create_error_response('InternalServerError', 'Health check failed')), 500
+
+
+@app.route('/api/v1/analytics', methods=['GET'])
+def get_analytics():
+    """
+    Get query analytics. Admin-only endpoint.
+
+    Query parameters:
+    - limit: Number of recent queries (default: 100, max: 1000)
+    - secret: Admin secret for authentication
+    """
+    try:
+        # Check admin authentication
+        secret = request.args.get('secret', '')
+        expected = os.getenv('RELOAD_SECRET', '')
+        if expected and secret != expected:
+            log_error(
+                'Unauthorized', f'Analytics requested without valid secret from {request.remote_addr}')
+            return jsonify(create_error_response('Unauthorized', 'Invalid credentials', 401)), 401
+
+        limit = min(int(request.args.get('limit', 100)), 1000)
+
+        logger.info(f"📊 Analytics requested (limit: {limit})")
+
+        # Try to fetch from Firebase
+        if db is None or QUERY_LOGS_COLLECTION is None:
+            logger.warning("Analytics unavailable - Firebase not connected")
+            return jsonify(create_success_response({
+                "total_queries": 0,
+                "recent_queries": [],
+                "message": "Analytics data unavailable"
+            }, "Analytics (limited mode)")), 200
+
+        try:
+            # Fetch recent queries from Firebase
+            query_logs = db.collection(QUERY_LOGS_COLLECTION)\
+                .order_by('timestamp', direction=firestore.Query.DESCENDING)\
+                .limit(limit)\
+                .stream()
+
+            queries = []
+            for doc in query_logs:
+                data = doc.to_dict()
+                queries.append({
+                    'query': data.get('query', ''),
+                    'timestamp': data.get('timestamp', ''),
+                })
+
+            logger.info(f"✅ Returned {len(queries)} analytics records")
+
+            return jsonify(create_success_response({
+                "total_queries": len(queries),
+                "recent_queries": queries,
+                "cache_stats": {
+                    "hits": cached_search_and_respond.cache_info().hits,
+                    "misses": cached_search_and_respond.cache_info().misses,
+                    "cached_size": cached_search_and_respond.cache_info().currsize
+                }
+            }, "Analytics retrieved successfully")), 200
+
+        except Exception as e:
+            log_error('FirestoreAnalyticsError',
+                      f'Failed to fetch analytics: {e}')
+            return jsonify(create_success_response({
+                "total_queries": 0,
+                "recent_queries": [],
+                "cache_stats": {
+                    "hits": cached_search_and_respond.cache_info().hits,
+                    "misses": cached_search_and_respond.cache_info().misses,
+                    "cached_size": cached_search_and_respond.cache_info().currsize
+                },
+                "message": "Partial analytics available"
+            }, "Analytics (cache only)")), 200
+
+    except Exception as e:
+        log_error('AnalyticsError', f'Analytics endpoint error: {e}')
+        return jsonify(create_error_response('InternalServerError', 'Failed to retrieve analytics')), 500
+
+
+@app.before_request
+def log_request():
+    """Log incoming requests."""
+    logger.debug(f"{request.method} {request.path} from {request.remote_addr}")
+
+
+@app.after_request
+def add_security_headers(response):
+    """Add security headers to all responses."""
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    return response
 
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    debug_mode = os.environ.get('FLASK_ENV') != 'production'
+    port = config.app.port
+    debug_mode = config.app.debug
 
-    print("\n" + "="*60)
-    print("🚀 Campus Guide Kiosk Starting Up")
-    print("="*60)
-    print(f"Port: {port}")
-    print(f"Debug Mode: {debug_mode}")
-    print(f"Flask Env: {os.environ.get('FLASK_ENV', 'development')}")
-    print(f"Embedding Model Loaded: {EMBEDDING_MODEL is not None}")
-    print(f"Firebase Connected: {db is not None}")
-    print(f"API Keys Configured: {len(API_KEYS)} key(s)")
-    print(f"FAQs in Memory: {len(FAQ_STORE)}")
-    print("="*60 + "\n")
+    logger.info("\n" + "="*60)
+    logger.info("[START] Campus Guide Kiosk Starting Up")
+    logger.info("="*60)
+    logger.info(f"Environment: {config.environment}")
+    logger.info(f"Port: {port}")
+    logger.info(f"Debug Mode: {debug_mode}")
+    logger.info(f"Embedding Model: {config.embedding.model_name}")
+    logger.info(f"Firebase Connected: {db is not None}")
+    logger.info(f"API Keys Configured: {len(API_KEYS)}")
+    logger.info(f"FAQs in Memory: {len(FAQ_STORE)}")
+    logger.info(
+        f"Rate Limiting: {'Enabled' if config.rate_limit.enabled else 'Disabled'}")
+    logger.info("="*60 + "\n")
 
-    app.run(host='0.0.0.0', port=port, debug=debug_mode, use_reloader=False)
+    app.run(host=config.app.host, port=port,
+            debug=debug_mode, use_reloader=False)

@@ -427,9 +427,12 @@ async function handleAsk(queryText) {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: queryText }),
         });
         const data = await response.json();
-        if (data.success) {
-            if (data.suggested_questions?.length > 0) {
-                const qList = data.suggested_questions.map(q =>
+        if (data.status === 'success' && data.data) {
+            const matchScore = parseFloat(data.data.match_score) || 0;
+            const isLowConfidence = matchScore < 0.7 && data.data.suggested_questions?.length > 0;
+
+            if (isLowConfidence) {
+                const qList = data.data.suggested_questions.map(q =>
                     `<button onclick="window.handleAskClick('${q.replace(/'/g, "\\'")}')"
                         class="text-left w-full p-2 md:p-4 my-2 rounded-lg block text-lg font-semibold border-l-4 transition-all focus:outline-none"
                         style="background-color: #3a3a3a; border-left-color: var(--secondary-neon); color: white;"
@@ -437,19 +440,19 @@ async function handleAsk(queryText) {
                 ).join('');
                 answerContent.innerHTML = `
                     <h4 class="text-sm font-bold mb-2 flex items-center" style="color: var(--secondary-neon);">
-                        <i class="material-icons mr-2" style="font-size: 1.2rem;">lightbulb</i>Low Confidence - Suggested Questions:
+                        <i class="material-icons mr-2" style="font-size: 1.2rem;">lightbulb</i>Low Confidence (${(matchScore * 100).toFixed(0)}%) - Suggested Questions:
                     </h4>
-                    <p class="text-white text-xl md:text-3xl mb-4">${data.response}</p>
+                    <p class="text-white text-xl md:text-3xl mb-4">${data.data.response}</p>
                     <div class="flex flex-col gap-2">${qList}</div>`;
             } else {
                 answerContent.innerHTML = `
                     <h4 class="text-sm font-bold mb-2 flex items-center" style="color: var(--purple-neon);">
                         <i class="material-icons mr-2" style="font-size: 1.2rem;">check_circle</i>Answer
                     </h4>
-                    <p class="text-white text-xl md:text-3xl leading-relaxed">${data.response}</p>`;
+                    <p class="text-white text-xl md:text-3xl leading-relaxed">${data.data.response}</p>`;
             }
         } else {
-            answerContent.innerHTML = `<div class="flex items-center" style="color: #f87171;"><i class="material-icons mr-3" style="font-size: 1.5rem;">error</i><p class="text-lg md:text-2xl">Error: ${data.response}</p></div>`;
+            answerContent.innerHTML = `<div class="flex items-center" style="color: #f87171;"><i class="material-icons mr-3" style="font-size: 1.5rem;">error</i><p class="text-lg md:text-2xl">Error: ${data.message || 'Unknown error'}</p></div>`;
         }
     } catch (e) {
         console.error(e);
