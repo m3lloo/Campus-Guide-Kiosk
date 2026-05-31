@@ -443,7 +443,8 @@ def index():
         )
     except Exception as e:
         log_error('TemplateError', f'Failed to render index template: {e}')
-        response, status_code = create_error_response('TemplateError', 'Failed to load page')
+        response, status_code = create_error_response(
+            'TemplateError', 'Failed to load page')
         return jsonify(response), status_code
 
 
@@ -496,14 +497,16 @@ def handle_ask_query():
     except ValidationError as e:
         duration_ms = (time.time() - start_time) * 1000
         log_api_call('/api/v1/ask', 'POST', 400, duration_ms)
-        response, status_code = create_error_response('ValidationError', str(e))
+        response, status_code = create_error_response(
+            'ValidationError', str(e))
         return jsonify(response), status_code
 
     except Exception as e:
         duration_ms = (time.time() - start_time) * 1000
         log_api_call('/api/v1/ask', 'POST', 500, duration_ms)
         log_error('QueryError', f'Query processing failed: {e}')
-        response, status_code = create_error_response('InternalServerError', 'Failed to process query')
+        response, status_code = create_error_response(
+            'InternalServerError', 'Failed to process query')
         return jsonify(response), status_code
 
 
@@ -520,7 +523,8 @@ def reload_faq_store():
         if expected and secret != expected:
             log_error(
                 'Unauthorized', f'Reload attempted with invalid secret from {request.remote_addr}')
-            response, status_code = create_error_response('Unauthorized', 'Invalid credentials', 401)
+            response, status_code = create_error_response(
+                'Unauthorized', 'Invalid credentials', 401)
             return jsonify(response), status_code
 
         logger.info("📤 Reloading FAQ store...")
@@ -536,7 +540,8 @@ def reload_faq_store():
 
     except Exception as e:
         log_error('ReloadError', f'Failed to reload FAQ store: {e}')
-        response, status_code = create_error_response('InternalServerError', 'Failed to reload FAQ store')
+        response, status_code = create_error_response(
+            'InternalServerError', 'Failed to reload FAQ store')
         return jsonify(response), status_code
 
 
@@ -570,7 +575,8 @@ def health_check():
 
     except Exception as e:
         log_error('HealthCheckError', f'Health check failed: {e}')
-        response, status_code = create_error_response('InternalServerError', 'Health check failed')
+        response, status_code = create_error_response(
+            'InternalServerError', 'Health check failed')
         return jsonify(response), status_code
 
 
@@ -590,7 +596,8 @@ def get_analytics():
         if expected and secret != expected:
             log_error(
                 'Unauthorized', f'Analytics requested without valid secret from {request.remote_addr}')
-            response, status_code = create_error_response('Unauthorized', 'Invalid credentials', 401)
+            response, status_code = create_error_response(
+                'Unauthorized', 'Invalid credentials', 401)
             return jsonify(response), status_code
 
         limit = min(int(request.args.get('limit', 100)), 1000)
@@ -649,7 +656,8 @@ def get_analytics():
 
     except Exception as e:
         log_error('AnalyticsError', f'Analytics endpoint error: {e}')
-        response, status_code = create_error_response('InternalServerError', 'Failed to retrieve analytics')
+        response, status_code = create_error_response(
+            'InternalServerError', 'Failed to retrieve analytics')
         return jsonify(response), status_code
 
 
