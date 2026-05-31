@@ -11,7 +11,6 @@ numpy==1.24.0
 
 # Firebase
 firebase-admin==7.0.0
-google-cloud-firestore==2.0.0
 
 # NLP
 nltk==3.8.0
