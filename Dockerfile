@@ -1,5 +1,5 @@
 # Multi-stage build for Campus Guide Kiosk
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
