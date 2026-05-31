@@ -65,7 +65,8 @@ limiter = Limiter(
     else [],
 )
 
-logger.info(f"[START] Campus Guide Kiosk starting in {config.environment} mode")
+logger.info(
+    f"[START] Campus Guide Kiosk starting in {config.environment} mode")
 
 # ---------------------------------------------------------------------------
 # NLTK Setup
@@ -91,7 +92,8 @@ EMBEDDING_MODEL = None
 logger.info("[LOADING] Loading Embedding Model...")
 try:
     EMBEDDING_MODEL = SentenceTransformer(config.embedding.model_name)
-    logger.info(f"[OK] Embedding Model '{config.embedding.model_name}' loaded.")
+    logger.info(
+        f"[OK] Embedding Model '{config.embedding.model_name}' loaded.")
 except Exception as e:
     log_error("ModelLoadError", f"Failed to load embedding model: {e}")
     logger.critical("❌ FATAL: Embedding Model failed to load")
@@ -115,7 +117,8 @@ try:
             logger.warning(
                 f"Firebase credentials file not found at {SERVICE_ACCOUNT_KEY}"
             )
-            logger.warning("The app will start but Firebase queries will fail.")
+            logger.warning(
+                "The app will start but Firebase queries will fail.")
     db = firestore.client()
 except Exception as e:
     log_error("FirebaseError", f"Firebase connection failed: {e}")
@@ -253,11 +256,12 @@ def get_gemini_response(prompt: str) -> str:
                 model=config.gemini.model,
                 contents=prompt,
                 config=genai.types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION, timeout=config.gemini.timeout
+                    system_instruction=SYSTEM_INSTRUCTION
                 ),
             )
             _current_key_index = key_index  # remember the working key
-            logger.debug(f"Gemini response generated successfully with key {key_index}")
+            logger.debug(
+                f"Gemini response generated successfully with key {key_index}")
             return response.text.strip()
 
         except ResourceExhausted:
@@ -327,7 +331,8 @@ def search_faqs(user_query: str) -> list:
         query_vec = np.array(query_vec, dtype=np.float32)
 
         # Single vectorized cosine similarity  (N,) in one call
-        norms = np.linalg.norm(EMBEDDING_MATRIX, axis=1) * np.linalg.norm(query_vec)
+        norms = np.linalg.norm(EMBEDDING_MATRIX, axis=1) * \
+            np.linalg.norm(query_vec)
         norms = np.where(norms == 0, 1e-9, norms)
         scores = EMBEDDING_MATRIX.dot(query_vec) / norms  # shape: (N,)
 
@@ -345,10 +350,12 @@ def search_faqs(user_query: str) -> list:
         # Filter and sort
         above_threshold = np.where(scores >= RESULT_MIN_SCORE)[0]
         if len(above_threshold) == 0:
-            logger.debug(f"No FAQ matches above threshold for query: {user_query[:50]}")
+            logger.debug(
+                f"No FAQ matches above threshold for query: {user_query[:50]}")
             return []
 
-        top_indices = above_threshold[np.argsort(scores[above_threshold])[::-1][:TOP_K]]
+        top_indices = above_threshold[np.argsort(
+            scores[above_threshold])[::-1][:TOP_K]]
 
         results = []
         for idx in top_indices:
@@ -441,7 +448,8 @@ def handle_bad_request(error):
 @app.errorhandler(404)
 def handle_not_found(error):
     """Handle 404 errors."""
-    response, status_code = create_error_response("NotFound", "Resource not found", 404)
+    response, status_code = create_error_response(
+        "NotFound", "Resource not found", 404)
     return jsonify(response), status_code
 
 
@@ -487,7 +495,8 @@ def handle_ask_query():
         validate_api_request(data, ["query"])
 
         # Sanitize and validate input
-        user_query = validate_query(data["query"], config.security.max_query_length)
+        user_query = validate_query(
+            data["query"], config.security.max_query_length)
 
         logger.info(f"🗣️  User query: {user_query[:50]}...")
 
@@ -533,7 +542,8 @@ def handle_ask_query():
     except ValidationError as e:
         duration_ms = (time.time() - start_time) * 1000
         log_api_call("/api/v1/ask", "POST", 400, duration_ms)
-        response, status_code = create_error_response("ValidationError", str(e))
+        response, status_code = create_error_response(
+            "ValidationError", str(e))
         return jsonify(response), status_code
 
     except Exception as e:
@@ -717,7 +727,8 @@ def get_analytics():
             )
 
         except Exception as e:
-            log_error("FirestoreAnalyticsError", f"Failed to fetch analytics: {e}")
+            log_error("FirestoreAnalyticsError",
+                      f"Failed to fetch analytics: {e}")
             return (
                 jsonify(
                     create_success_response(
@@ -779,4 +790,5 @@ if __name__ == "__main__":
     )
     logger.info("=" * 60 + "\n")
 
-    app.run(host=config.app.host, port=port, debug=debug_mode, use_reloader=False)
+    app.run(host=config.app.host, port=port,
+            debug=debug_mode, use_reloader=False)
