@@ -87,7 +87,7 @@ class TestAPIValidation:
         """Test validating empty API request."""
         with pytest.raises(ValidationError) as exc_info:
             validate_api_request({}, ['query'])
-        assert "Missing required field" in str(exc_info.value)
+        assert "Request body cannot be empty" in str(exc_info.value)
 
     def test_validate_api_request_none_data(self):
         """Test validating None API request."""
