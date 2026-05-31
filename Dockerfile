@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --user --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Final stage
 FROM python:3.11-slim
@@ -23,13 +23,12 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
+COPY --from=builder /usr/local /usr/local
 
 # Copy application code
 COPY . .
 
-# Make sure scripts in .local are usable
-ENV PATH=/root/.local/bin:$PATH
+# Set Python environment variables
 ENV PYTHONUNBUFFERED=1
 
 # Create logs directory

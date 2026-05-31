@@ -108,7 +108,7 @@ jobs:
         output: 'trivy-results.sarif'
     
     - name: Upload Trivy results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@v4
       with:
         sarif_file: 'trivy-results.sarif'
 
@@ -126,10 +126,14 @@ jobs:
         DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
         DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
       run: |
+        if [ -z "$DEPLOY_HOST" ]; then
+          echo "Warning: DEPLOY_HOST secret not configured. Skipping deployment."
+          exit 0
+        fi
         mkdir -p ~/.ssh
         echo "$DEPLOY_KEY" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan $DEPLOY_HOST >> ~/.ssh/known_hosts
+        ssh-keyscan -t rsa $DEPLOY_HOST >> ~/.ssh/known_hosts 2>/dev/null || true
         
         ssh $DEPLOY_USER@$DEPLOY_HOST << 'EOF'
           cd /app/campus-guide-kiosk
@@ -154,10 +158,14 @@ jobs:
         DEPLOY_HOST: ${{ secrets.PROD_DEPLOY_HOST }}
         DEPLOY_USER: ${{ secrets.PROD_DEPLOY_USER }}
       run: |
+        if [ -z "$DEPLOY_HOST" ]; then
+          echo "Warning: PROD_DEPLOY_HOST secret not configured. Skipping deployment."
+          exit 0
+        fi
         mkdir -p ~/.ssh
         echo "$DEPLOY_KEY" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan $DEPLOY_HOST >> ~/.ssh/known_hosts
+        ssh-keyscan -t rsa $DEPLOY_HOST >> ~/.ssh/known_hosts 2>/dev/null || true
         
         ssh $DEPLOY_USER@$DEPLOY_HOST << 'EOF'
           cd /app/campus-guide-kiosk
