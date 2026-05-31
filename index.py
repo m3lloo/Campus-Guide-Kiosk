@@ -25,11 +25,12 @@ from firebase_admin import credentials, firestore
 from sentence_transformers import SentenceTransformer
 from datetime import datetime
 from dotenv import load_dotenv
-import google.generativeai as genai
+import google.genai as genai
 from google.api_core.exceptions import ResourceExhausted
 
 try:
     import requests as _requests
+
     _REQUESTS_AVAILABLE = True
 except ImportError:
     _REQUESTS_AVAILABLE = False
@@ -40,10 +41,10 @@ load_dotenv()
 # Config
 # ---------------------------------------------------------------------------
 SERVICE_ACCOUNT_KEY_PATH = "firebase/campus_guide_kiosk.json"
-FAQ_COLLECTION_NAME = 'faqs'          # must match app.py
-EVENTS_COLLECTION_NAME = 'events'
+FAQ_COLLECTION_NAME = "faqs"  # must match app.py
+EVENTS_COLLECTION_NAME = "events"
 
-USAGE_FILE = '.api_usage.json'        # persists counter across runs
+USAGE_FILE = ".api_usage.json"  # persists counter across runs
 DAILY_FREE_LIMIT = 200
 
 # Optional: set APP_RELOAD_URL in .env to auto-refresh app.py after changes
@@ -56,7 +57,10 @@ RELOAD_SECRET = os.getenv("RELOAD_SECRET", "")
 # NLTK
 # ---------------------------------------------------------------------------
 print("⏳ Checking NLTK resources...")
-for resource, pkg in [('corpora/stopwords', 'stopwords'), ('tokenizers/punkt', 'punkt')]:
+for resource, pkg in [
+    ("corpora/stopwords", "stopwords"),
+    ("tokenizers/punkt", "punkt"),
+]:
     try:
         nltk.data.find(resource)
     except LookupError:
@@ -65,11 +69,34 @@ print("✅ NLTK ready.")
 
 
 stemmer = PorterStemmer()
-CHATBOT_STOP_WORDS = set(stopwords.words('english') + [
-    'a', 'an', 'the', 'is', 'are', 'was', 'were', 'of', 'in', 'at', 'on',
-    'with', 'by', 'what', 'where', 'how', 'to', 'please', 'want', 'need',
-    'know', 'tell', 'find',
-])
+CHATBOT_STOP_WORDS = set(
+    stopwords.words("english")
+    + [
+        "a",
+        "an",
+        "the",
+        "is",
+        "are",
+        "was",
+        "were",
+        "of",
+        "in",
+        "at",
+        "on",
+        "with",
+        "by",
+        "what",
+        "where",
+        "how",
+        "to",
+        "please",
+        "want",
+        "need",
+        "know",
+        "tell",
+        "find",
+    ]
+)
 
 # ---------------------------------------------------------------------------
 # Embedding Model
@@ -99,12 +126,11 @@ gemini_model_instance = None
 
 
 def _get_gemini_model():
-    """Returns a configured GenerativeModel, rotating keys on exhaustion."""
+    """Returns a configured client for Gemini API."""
     global _current_key_index, gemini_model_instance
     if not API_KEYS:
         return None
-    genai.configure(api_key=API_KEYS[_current_key_index])
-    gemini_model_instance = genai.GenerativeModel('gemini-2.5-flash')
+    gemini_model_instance = genai.Client(api_key=API_KEYS[_current_key_index])
     return gemini_model_instance
 
 
@@ -116,9 +142,10 @@ def _call_gemini(prompt: str) -> str | None:
     for attempt in range(len(API_KEYS)):
         key_index = (_current_key_index + attempt) % len(API_KEYS)
         try:
-            genai.configure(api_key=API_KEYS[key_index])
-            m = genai.GenerativeModel('gemini-2.5-flash')
-            resp = m.generate_content(prompt)
+            client = genai.Client(api_key=API_KEYS[key_index])
+            resp = client.models.generate_content(
+                model="gemini-2.5-flash", contents=prompt
+            )
             _current_key_index = key_index
             _increment_usage()
             return resp.text.strip()
@@ -131,6 +158,7 @@ def _call_gemini(prompt: str) -> str | None:
     print("❌ All API keys exhausted.")
     return None
 
+
 # ---------------------------------------------------------------------------
 # API usage counter — persisted to disk so it survives restarts
 # ---------------------------------------------------------------------------
@@ -139,18 +167,18 @@ def _call_gemini(prompt: str) -> str | None:
 def _load_usage() -> dict:
     today = datetime.now().strftime("%Y-%m-%d")
     try:
-        with open(USAGE_FILE, 'r') as f:
+        with open(USAGE_FILE, "r") as f:
             data = json.load(f)
-        if data.get('date') != today:
-            return {'date': today, 'count': 0}
+        if data.get("date") != today:
+            return {"date": today, "count": 0}
         return data
     except (FileNotFoundError, json.JSONDecodeError):
-        return {'date': today, 'count': 0}
+        return {"date": today, "count": 0}
 
 
 def _save_usage(data: dict):
     try:
-        with open(USAGE_FILE, 'w') as f:
+        with open(USAGE_FILE, "w") as f:
             json.dump(data, f)
     except Exception as e:
         print(f"⚠️  Could not save usage counter: {e}")
@@ -158,15 +186,16 @@ def _save_usage(data: dict):
 
 def _increment_usage():
     data = _load_usage()
-    data['count'] += 1
+    data["count"] += 1
     _save_usage(data)
 
 
 def _get_usage() -> tuple[int, int]:
     """Returns (used_today, remaining)."""
     data = _load_usage()
-    used = data.get('count', 0)
+    used = data.get("count", 0)
     return used, max(0, DAILY_FREE_LIMIT - used)
+
 
 # ---------------------------------------------------------------------------
 # Firebase
@@ -178,8 +207,7 @@ def initialize_firestore_admin():
         return firestore.client()
     try:
         if not os.path.exists(SERVICE_ACCOUNT_KEY_PATH):
-            raise FileNotFoundError(
-                f"Key not found: {SERVICE_ACCOUNT_KEY_PATH}")
+            raise FileNotFoundError(f"Key not found: {SERVICE_ACCOUNT_KEY_PATH}")
         cred = credentials.Certificate(SERVICE_ACCOUNT_KEY_PATH)
         firebase_admin.initialize_app(cred)
         print("✅ Firebase Admin SDK initialized.")
@@ -199,7 +227,7 @@ db = initialize_firestore_admin()
 
 
 def build_embedding_context(answer: str, questions: list) -> str:
-    q_str = ' '.join(questions) if questions else ''
+    q_str = " ".join(questions) if questions else ""
     return f"Answer: {answer}. Possible Questions: {q_str}"
 
 
@@ -207,37 +235,67 @@ def build_embedding_context(answer: str, questions: list) -> str:
 # Category definitions
 # ---------------------------------------------------------------------------
 CATEGORY_MAP = {
-    1: "administrative_office", 2: "academic_facility", 3: "room_location",
-    4: "dining_area", 5: "general_facility", 6: "health_safety",
-    7: "transport_parking", 8: "sports_recreation", 9: "bookstore_merchandise",
-    10: "housing_accommodation", 11: "student_services", 12: "it_tech_support",
-    13: "tuition_financial_aid", 14: "career_placement_alumni",
-    15: "accessibility_pwd", 16: "school_personnel", 17: "student_organizations",
-    18: "faculty_office", 19: "admissions_enrollment", 20: "events_activities",
-    21: "policies_regulations", 22: "academic_program_course", 23: "system_info",
+    1: "administrative_office",
+    2: "academic_facility",
+    3: "room_location",
+    4: "dining_area",
+    5: "general_facility",
+    6: "health_safety",
+    7: "transport_parking",
+    8: "sports_recreation",
+    9: "bookstore_merchandise",
+    10: "housing_accommodation",
+    11: "student_services",
+    12: "it_tech_support",
+    13: "tuition_financial_aid",
+    14: "career_placement_alumni",
+    15: "accessibility_pwd",
+    16: "school_personnel",
+    17: "student_organizations",
+    18: "faculty_office",
+    19: "admissions_enrollment",
+    20: "events_activities",
+    21: "policies_regulations",
+    22: "academic_program_course",
+    23: "system_info",
     0: "general",
 }
 CATEGORY_DESCRIPTION = {
-    1: "Registrar / Admin / Finance",       2: "College Buildings / Labs",
-    3: "Classroom / Room Numbers",          4: "Canteen / Dining Hall",
-    5: "Student Union / Chapel",            6: "Clinic / Security",
-    7: "Parking / Shuttles",                8: "Gym / Courts",
-    9: "Bookstore / Uniforms",              10: "Dormitories",
-    11: "Library / Guidance",              12: "Wi-Fi / Portal",
-    13: "Tuition / Scholarships",          14: "OJT / Alumni",
-    15: "Accessibility",                   16: "Specific People (Deans, Staff)",
-    17: "Clubs / Orgs",                    18: "Faculty Rooms",
-    19: "Admissions / Enrollment",         20: "School Calendar / Events",
-    21: "Policies / Handbook",             22: "Curriculum / Thesis",
-    23: "About the AI / Kiosk",             0: "General (Default)",
+    1: "Registrar / Admin / Finance",
+    2: "College Buildings / Labs",
+    3: "Classroom / Room Numbers",
+    4: "Canteen / Dining Hall",
+    5: "Student Union / Chapel",
+    6: "Clinic / Security",
+    7: "Parking / Shuttles",
+    8: "Gym / Courts",
+    9: "Bookstore / Uniforms",
+    10: "Dormitories",
+    11: "Library / Guidance",
+    12: "Wi-Fi / Portal",
+    13: "Tuition / Scholarships",
+    14: "OJT / Alumni",
+    15: "Accessibility",
+    16: "Specific People (Deans, Staff)",
+    17: "Clubs / Orgs",
+    18: "Faculty Rooms",
+    19: "Admissions / Enrollment",
+    20: "School Calendar / Events",
+    21: "Policies / Handbook",
+    22: "Curriculum / Thesis",
+    23: "About the AI / Kiosk",
+    0: "General (Default)",
 }
 CATEGORY_NAME_TO_NUM = {v: k for k, v in CATEGORY_MAP.items()}
 
 EVENT_DEPARTMENT_MAP = {
-    'All': 'All Departments', 'CCS': 'Computer Studies (CCS)',
-    'CCA': 'Comm & Arts (CCA)', 'CBA': 'Business (CBA)',
-    'CCJ': 'Criminal Justice (CCJ)', 'CEAS': 'Education & Arts (CEAS)',
-    'CON': 'Nursing (CON)',
+    "All": "All Departments",
+    "CCS": "Computer Studies (CCS)",
+    "CCA": "Comm & Arts (CCA)",
+    "CBA": "Business (CBA)",
+    "CCJ": "Criminal Justice (CCJ)",
+    "CEAS": "Education & Arts (CEAS)",
+    "CON": "Nursing (CON)",
 }
 
 # ---------------------------------------------------------------------------
@@ -248,7 +306,7 @@ EVENT_DEPARTMENT_MAP = {
 def generate_keywords(text_blob: str) -> list:
     if not text_blob:
         return []
-    text = re.sub(r'[^a-z0-9\s]', ' ', text_blob.lower())
+    text = re.sub(r"[^a-z0-9\s]", " ", text_blob.lower())
     try:
         tokens = nltk.word_tokenize(text)
     except Exception:
@@ -280,19 +338,20 @@ def optimize_answer(answer: str) -> str:
 def generate_hypothetical_questions(answer: str) -> list:
     prompt = (
         f"You are simulating a university student.\n"
-        f"The answer is: \"{answer}\".\n"
+        f'The answer is: "{answer}".\n'
         f"List 5 distinct, short questions a student would ask to get this answer.\n"
         f"Format: just the questions, one per line, no numbering, no dashes."
     )
     result = _call_gemini(prompt)
     if not result:
         return []
-    lines = result.strip().split('\n')
-    return [l.strip('- ').strip() for l in lines if l.strip()][:5]
+    lines = result.strip().split("\n")
+    return [l.strip("- ").strip() for l in lines if l.strip()][:5]
 
 
-def prepare_faq_document(answer: str, questions: list, manual_keywords: list,
-                         category: str) -> dict:
+def prepare_faq_document(
+    answer: str, questions: list, manual_keywords: list, category: str
+) -> dict:
     """
     Builds the Firestore document dict.
     Schema is shared between this tool and app.py — do not change field names
@@ -307,16 +366,18 @@ def prepare_faq_document(answer: str, questions: list, manual_keywords: list,
     embedding = generate_embedding(embed_text)
 
     doc = {
-        'answer':              answer,
-        'generated_questions': questions,
-        'keywords':            final_keywords,
-        'category':            category.lower() if category else 'general',
-        'created_at':          firestore.SERVER_TIMESTAMP,
+        "answer": answer,
+        "generated_questions": questions,
+        "keywords": final_keywords,
+        "category": category.lower() if category else "general",
+        "created_at": firestore.SERVER_TIMESTAMP,
     }
     if embedding is not None:
-        doc['embedding'] = embedding
+        doc["embedding"] = embedding
     else:
-        print("⚠️  No embedding generated — document will be unsearchable via semantic search.")
+        print(
+            "⚠️  No embedding generated — document will be unsearchable via semantic search."
+        )
     return doc
 
 
@@ -329,17 +390,17 @@ def notify_app_reload():
     if not APP_RELOAD_URL or not _REQUESTS_AVAILABLE:
         return
     try:
-        headers = {'X-Reload-Secret': RELOAD_SECRET} if RELOAD_SECRET else {}
+        headers = {"X-Reload-Secret": RELOAD_SECRET} if RELOAD_SECRET else {}
         resp = _requests.post(APP_RELOAD_URL, headers=headers, timeout=5)
         if resp.ok:
             data = resp.json()
-            faq_count = data.get('data', {}).get('faq_count', '?')
-            print(
-                f"✅ App store reloaded. FAQs in memory: {faq_count}")
+            faq_count = data.get("data", {}).get("faq_count", "?")
+            print(f"✅ App store reloaded. FAQs in memory: {faq_count}")
         else:
             print(f"⚠️  Reload endpoint returned {resp.status_code}")
     except Exception as e:
         print(f"⚠️  Could not reach app reload endpoint: {e}")
+
 
 # ---------------------------------------------------------------------------
 # Category selection UI
@@ -358,16 +419,16 @@ def get_category_selection(default_num: int = 0) -> str | None:
         print(f"{col1:<42} {col2}")
 
     while True:
-        raw = input(
-            f"👉 Select Category (default {default_num}) or 'cancel': ").strip()
-        if raw.lower() == 'cancel':
+        raw = input(f"👉 Select Category (default {default_num}) or 'cancel': ").strip()
+        if raw.lower() == "cancel":
             return None
         if not raw:
-            return CATEGORY_MAP.get(default_num, 'general')
+            return CATEGORY_MAP.get(default_num, "general")
         try:
-            return CATEGORY_MAP.get(int(raw), CATEGORY_MAP.get(default_num, 'general'))
+            return CATEGORY_MAP.get(int(raw), CATEGORY_MAP.get(default_num, "general"))
         except ValueError:
             print("Invalid input. Enter a number or 'cancel'.")
+
 
 # ---------------------------------------------------------------------------
 # FAQ CRUD
@@ -394,28 +455,25 @@ def add_faq_interactive():
 
         print(f"\n✨ AI-Optimized Answer: {optimized}")
         use_opt = input("👉 Use AI-Optimized Answer? (Y/n): ").strip().lower()
-        if use_opt in ('y', ''):
+        if use_opt in ("y", ""):
             final_answer = optimized
         else:
-            manual_edit = input(
-                "👉 Edit answer manually? (y/N): ").strip().lower()
-            if manual_edit == 'y':
+            manual_edit = input("👉 Edit answer manually? (y/N): ").strip().lower()
+            if manual_edit == "y":
                 edited = input("New Answer: ").strip()
                 if edited:
                     final_answer = edited
 
         if generated_qs:
             print(f"\n🧠 Predicted Questions: {generated_qs}")
-            use_qs = input(
-                "👉 Use AI-Generated Questions? (Y/n): ").strip().lower()
-            if use_qs in ('y', ''):
+            use_qs = input("👉 Use AI-Generated Questions? (Y/n): ").strip().lower()
+            if use_qs in ("y", ""):
                 final_questions = generated_qs
     else:
         print("⚠️  Gemini not configured — skipping AI optimization.")
 
-    extra_kw = input(
-        "👉 Additional keywords (comma-separated, optional): ").strip()
-    manual_kw = [k.strip().lower() for k in extra_kw.split(',') if k.strip()]
+    extra_kw = input("👉 Additional keywords (comma-separated, optional): ").strip()
+    manual_kw = [k.strip().lower() for k in extra_kw.split(",") if k.strip()]
 
     cat = get_category_selection()
     if cat is None:
@@ -435,13 +493,14 @@ def edit_faq_interactive(doc_id: str, faq_data: dict):
         return
 
     print(f"\n=== ✏️  Edit FAQ ID: {doc_id} ===")
-    current_answer = faq_data['answer']
+    current_answer = faq_data["answer"]
     print(f"Current Answer: {current_answer}")
-    new_answer = input(
-        "👉 New Answer (blank = keep current): ").strip() or current_answer
+    new_answer = (
+        input("👉 New Answer (blank = keep current): ").strip() or current_answer
+    )
 
     final_answer = new_answer
-    final_questions = faq_data.get('generated_questions', [])
+    final_questions = faq_data.get("generated_questions", [])
 
     if new_answer != current_answer and API_KEYS:
         print("⏳ Answer changed — re-optimizing and re-generating questions...")
@@ -449,21 +508,21 @@ def edit_faq_interactive(doc_id: str, faq_data: dict):
         generated_qs = generate_hypothetical_questions(optimized)
 
         print(f"\n✨ AI-Optimized Answer: {optimized}")
-        if input("👉 Use new AI-Optimized Answer? (Y/n): ").strip().lower() in ('y', ''):
+        if input("👉 Use new AI-Optimized Answer? (Y/n): ").strip().lower() in ("y", ""):
             final_answer = optimized
 
         if generated_qs:
             print(f"\n🧠 New Predicted Questions: {generated_qs}")
-            if input("👉 Replace questions with new AI-Generated ones? (Y/n): ").strip().lower() in ('y', ''):
+            if input(
+                "👉 Replace questions with new AI-Generated ones? (Y/n): "
+            ).strip().lower() in ("y", ""):
                 final_questions = generated_qs
 
-    print(
-        f"\nCurrent Keywords (auto): {', '.join(faq_data.get('keywords', []))}")
-    extra_kw = input(
-        "👉 Additional keywords to merge in (comma-separated): ").strip()
-    manual_kw = [k.strip().lower() for k in extra_kw.split(',') if k.strip()]
+    print(f"\nCurrent Keywords (auto): {', '.join(faq_data.get('keywords', []))}")
+    extra_kw = input("👉 Additional keywords to merge in (comma-separated): ").strip()
+    manual_kw = [k.strip().lower() for k in extra_kw.split(",") if k.strip()]
 
-    current_cat_name = faq_data.get('category', 'general')
+    current_cat_name = faq_data.get("category", "general")
     current_cat_num = CATEGORY_NAME_TO_NUM.get(current_cat_name, 0)
     print(f"Current Category: {current_cat_name}")
     cat = get_category_selection(default_num=current_cat_num)
@@ -471,8 +530,8 @@ def edit_faq_interactive(doc_id: str, faq_data: dict):
         return
 
     doc = prepare_faq_document(final_answer, final_questions, manual_kw, cat)
-    doc['updated_at'] = firestore.SERVER_TIMESTAMP
-    doc.pop('created_at', None)   # preserve original created_at
+    doc["updated_at"] = firestore.SERVER_TIMESTAMP
+    doc.pop("created_at", None)  # preserve original created_at
 
     try:
         db.collection(FAQ_COLLECTION_NAME).document(doc_id).update(doc)
@@ -487,10 +546,11 @@ def delete_faq(faqs: list) -> bool:
         num = int(input("👉 # to DELETE: ")) - 1
         if 0 <= num < len(faqs):
             faq = faqs[num]
-            confirm = input(
-                f"DELETE '{faq['answer'][:40]}...' ? (y/N): ").strip().lower()
-            if confirm == 'y':
-                db.collection(FAQ_COLLECTION_NAME).document(faq['id']).delete()
+            confirm = (
+                input(f"DELETE '{faq['answer'][:40]}...' ? (y/N): ").strip().lower()
+            )
+            if confirm == "y":
+                db.collection(FAQ_COLLECTION_NAME).document(faq["id"]).delete()
                 print("✅ Deleted.")
                 notify_app_reload()
                 return True
@@ -508,13 +568,14 @@ def fetch_all_faqs() -> dict | None:
         by_cat: dict = {}
         for doc in docs:
             f = doc.to_dict()
-            f['id'] = doc.id
-            cat = f.get('category', 'general')
+            f["id"] = doc.id
+            cat = f.get("category", "general")
             by_cat.setdefault(cat, []).append(f)
         return by_cat
     except Exception as e:
         print(f"❌ Error: {e}")
         return None
+
 
 # ---------------------------------------------------------------------------
 # FAQ manager menus
@@ -528,24 +589,24 @@ def manage_category_faqs(cat_name: str, faqs: list):
             print("No FAQs in this category.")
             break
         for i, f in enumerate(faqs):
-            preview = f['answer'][:55]
-            qs = f.get('generated_questions', [])
+            preview = f["answer"][:55]
+            qs = f.get("generated_questions", [])
             q_hint = f" → Q: {qs[0][:40]}" if qs else ""
             print(f"[{i+1:2}] {preview}...{q_hint}")
 
         print("\n[R] Return | [E] Edit | [D] Delete | (number) View full")
         choice = input("👉 Choice: ").strip().upper()
 
-        if choice == 'R':
+        if choice == "R":
             break
-        elif choice == 'D':
+        elif choice == "D":
             if delete_faq(faqs):
                 break
-        elif choice == 'E':
+        elif choice == "E":
             try:
                 num = int(input("👉 # to EDIT: ")) - 1
                 if 0 <= num < len(faqs):
-                    edit_faq_interactive(faqs[num]['id'], faqs[num])
+                    edit_faq_interactive(faqs[num]["id"], faqs[num])
                 break
             except (ValueError, IndexError):
                 pass
@@ -578,9 +639,9 @@ def manage_faqs():
         print("\n[A] Add FAQ | [M] Main Menu")
         choice = input("👉 Choice: ").strip().upper()
 
-        if choice == 'M':
+        if choice == "M":
             break
-        elif choice == 'A':
+        elif choice == "A":
             add_faq_interactive()
         else:
             try:
@@ -588,6 +649,7 @@ def manage_faqs():
                 manage_category_faqs(cat_name, all_faqs[cat_name])
             except (ValueError, IndexError):
                 pass
+
 
 # ---------------------------------------------------------------------------
 # Event CRUD
@@ -603,16 +665,16 @@ def fetch_all_events() -> list | None:
         events = []
         for doc in docs:
             e = doc.to_dict()
-            e['id'] = doc.id
+            e["id"] = doc.id
             events.append(e)
-        events.sort(key=lambda x: x.get('date', '9999-01-01T00:00:00'))
+        events.sort(key=lambda x: x.get("date", "9999-01-01T00:00:00"))
         return events
     except Exception as e:
         print(f"❌ Error: {e}")
         return None
 
 
-def _parse_date_input(prompt_str: str, current_val: str = '') -> str | None:
+def _parse_date_input(prompt_str: str, current_val: str = "") -> str | None:
     """Prompts for a date, returns ISO string or None on invalid input."""
     raw = input(prompt_str).strip()
     if not raw and current_val:
@@ -628,13 +690,12 @@ def _parse_date_input(prompt_str: str, current_val: str = '') -> str | None:
         return None
 
 
-def _select_department(current: str = 'All') -> str:
+def _select_department(current: str = "All") -> str:
     depts = list(EVENT_DEPARTMENT_MAP.keys())
     print("\n--- Departments ---")
     for i, d in enumerate(depts):
         print(f"  [{i+1}] {d} — {EVENT_DEPARTMENT_MAP[d]}")
-    print(
-        f"  Current: {current} ({EVENT_DEPARTMENT_MAP.get(current, current)})")
+    print(f"  Current: {current} ({EVENT_DEPARTMENT_MAP.get(current, current)})")
     raw = input("👉 Dept # (blank = keep current): ").strip()
     if not raw:
         return current
@@ -658,13 +719,15 @@ def add_event():
         return
     dept = _select_department()
     try:
-        db.collection(EVENTS_COLLECTION_NAME).add({
-            'title':      title,
-            'date':       iso,
-            'details':    details,
-            'department': dept,
-            'created_at': firestore.SERVER_TIMESTAMP,
-        })
+        db.collection(EVENTS_COLLECTION_NAME).add(
+            {
+                "title": title,
+                "date": iso,
+                "details": details,
+                "department": dept,
+                "created_at": firestore.SERVER_TIMESTAMP,
+            }
+        )
         print("✅ Event Added.")
     except Exception as e:
         print(f"❌ Error: {e}")
@@ -673,9 +736,9 @@ def add_event():
 def edit_event_interactive(doc_id: str, event_data: dict):
     print(f"\n=== ✏️  Edit Event ID: {doc_id} ===")
 
-    title = event_data['title']
-    details = event_data.get('details', '')
-    dept = event_data.get('department', 'All')
+    title = event_data["title"]
+    details = event_data.get("details", "")
+    dept = event_data.get("department", "All")
 
     print(f"Current Title: {title}")
     new_title = input("👉 New Title (blank = keep): ").strip() or title
@@ -684,14 +747,13 @@ def edit_event_interactive(doc_id: str, event_data: dict):
     new_details = input("👉 New Details (blank = keep): ").strip() or details
 
     try:
-        friendly = datetime.fromisoformat(
-            event_data['date']).strftime("%Y-%m-%d %H:%M")
+        friendly = datetime.fromisoformat(event_data["date"]).strftime("%Y-%m-%d %H:%M")
     except Exception:
-        friendly = event_data['date']
+        friendly = event_data["date"]
 
     iso = _parse_date_input(
         f"Current Date: {friendly}\n👉 New Date (blank = keep, YYYY-MM-DD HH:MM): ",
-        current_val=event_data['date'],
+        current_val=event_data["date"],
     )
     if iso is None:
         return
@@ -699,13 +761,15 @@ def edit_event_interactive(doc_id: str, event_data: dict):
     new_dept = _select_department(current=dept)
 
     try:
-        db.collection(EVENTS_COLLECTION_NAME).document(doc_id).update({
-            'title':      new_title,
-            'date':       iso,
-            'details':    new_details,
-            'department': new_dept,
-            'updated_at': firestore.SERVER_TIMESTAMP,
-        })
+        db.collection(EVENTS_COLLECTION_NAME).document(doc_id).update(
+            {
+                "title": new_title,
+                "date": iso,
+                "details": new_details,
+                "department": new_dept,
+                "updated_at": firestore.SERVER_TIMESTAMP,
+            }
+        )
         print("✅ Event Updated.")
     except Exception as e:
         print(f"❌ Error: {e}")
@@ -716,9 +780,11 @@ def delete_event(events: list) -> bool:
         num = int(input("👉 # to DELETE: ")) - 1
         if 0 <= num < len(events):
             e = events[num]
-            if input(f"DELETE '{e['title']}' on {e['date']} ? (y/N): ").strip().lower() == 'y':
-                db.collection(EVENTS_COLLECTION_NAME).document(
-                    e['id']).delete()
+            if (
+                input(f"DELETE '{e['title']}' on {e['date']} ? (y/N): ").strip().lower()
+                == "y"
+            ):
+                db.collection(EVENTS_COLLECTION_NAME).document(e["id"]).delete()
                 print("✅ Deleted.")
                 return True
     except (ValueError, IndexError):
@@ -738,36 +804,37 @@ def manage_events():
         else:
             for i, e in enumerate(events):
                 try:
-                    date_str = datetime.fromisoformat(
-                        e['date']).strftime("%Y-%m-%d %H:%M")
+                    date_str = datetime.fromisoformat(e["date"]).strftime(
+                        "%Y-%m-%d %H:%M"
+                    )
                 except Exception:
-                    date_str = e['date']
-                dept_str = EVENT_DEPARTMENT_MAP.get(
-                    e.get('department', 'All'), '')
+                    date_str = e["date"]
+                dept_str = EVENT_DEPARTMENT_MAP.get(e.get("department", "All"), "")
                 print(f"[{i+1:2}] {date_str} ({dept_str}): {e['title'][:45]}")
 
         print("\n[A] Add | [E] Edit | [D] Delete | [M] Main Menu")
         choice = input("👉 Choice: ").strip().upper()
 
-        if choice == 'M':
+        if choice == "M":
             break
-        elif choice == 'A':
+        elif choice == "A":
             add_event()
-        elif choice == 'E':
+        elif choice == "E":
             if not events:
                 continue
             try:
                 num = int(input("👉 # to EDIT: ")) - 1
                 if 0 <= num < len(events):
-                    edit_event_interactive(events[num]['id'], events[num])
+                    edit_event_interactive(events[num]["id"], events[num])
             except (ValueError, IndexError):
                 pass
-        elif choice == 'D':
+        elif choice == "D":
             if not events:
                 continue
             delete_event(events)
         else:
             print("Invalid choice.")
+
 
 # ---------------------------------------------------------------------------
 # Main menu
@@ -786,18 +853,19 @@ def main_menu():
         print("==========================")
         if API_KEYS:
             print(
-                f"🤖 Gemini API  |  Used today: {used}  |  Est. remaining: {remaining}")
+                f"🤖 Gemini API  |  Used today: {used}  |  Est. remaining: {remaining}"
+            )
             print("==========================")
         print("[1] 🤖 Manage FAQs")
         print("[2] 📅 Manage Events")
         print("[0] 🚪 Exit")
         choice = input("👉 Choice: ").strip()
 
-        if choice == '1':
+        if choice == "1":
             manage_faqs()
-        elif choice == '2':
+        elif choice == "2":
             manage_events()
-        elif choice == '0':
+        elif choice == "0":
             print("Goodbye.")
             break
         else:

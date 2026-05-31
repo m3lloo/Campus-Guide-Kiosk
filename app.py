@@ -20,7 +20,7 @@ import traceback
 import numpy as np
 from functools import lru_cache
 from flask import Flask, jsonify, request, render_template
-import google.generativeai as genai
+import google.genai as genai
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -35,13 +35,19 @@ from sentence_transformers import SentenceTransformer
 from config import config
 from logging_config import logger, log_api_call, log_error
 from error_handlers import (
-    APIError, ValidationError, InternalServerError as InternalServerErrorCustom,
-    sanitize_input, validate_api_request, validate_query, create_success_response, create_error_response
+    APIError,
+    ValidationError,
+    InternalServerError as InternalServerErrorCustom,
+    sanitize_input,
+    validate_api_request,
+    validate_query,
+    create_success_response,
+    create_error_response,
 )
 
 # Memory optimization for low-resource deployments
-os.environ['OMP_NUM_THREADS'] = '1'
-os.environ['MKL_NUM_THREADS'] = '1'
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
 
 warnings.filterwarnings("ignore")
 
@@ -53,18 +59,22 @@ limiter = Limiter(
     key_func=get_remote_address,
     default_limits=[
         f"{config.rate_limit.requests_per_minute}/minute",
-        f"{config.rate_limit.requests_per_hour}/hour"
-    ] if config.rate_limit.enabled else []
+        f"{config.rate_limit.requests_per_hour}/hour",
+    ]
+    if config.rate_limit.enabled
+    else [],
 )
 
-logger.info(
-    f"[START] Campus Guide Kiosk starting in {config.environment} mode")
+logger.info(f"[START] Campus Guide Kiosk starting in {config.environment} mode")
 
 # ---------------------------------------------------------------------------
 # NLTK Setup
 # ---------------------------------------------------------------------------
 logger.info("[LOADING] Checking NLTK resources...")
-for resource, path in [('corpora/stopwords', 'stopwords'), ('tokenizers/punkt', 'punkt')]:
+for resource, path in [
+    ("corpora/stopwords", "stopwords"),
+    ("tokenizers/punkt", "punkt"),
+]:
     try:
         nltk.data.find(resource)
     except LookupError:
@@ -72,7 +82,7 @@ for resource, path in [('corpora/stopwords', 'stopwords'), ('tokenizers/punkt', 
 logger.info("[OK] NLTK ready.")
 
 stemmer = PorterStemmer()
-STOP_WORDS = set(stopwords.words('english'))
+STOP_WORDS = set(stopwords.words("english"))
 
 # ---------------------------------------------------------------------------
 # Embedding Model
@@ -81,10 +91,9 @@ EMBEDDING_MODEL = None
 logger.info("[LOADING] Loading Embedding Model...")
 try:
     EMBEDDING_MODEL = SentenceTransformer(config.embedding.model_name)
-    logger.info(
-        f"[OK] Embedding Model '{config.embedding.model_name}' loaded.")
+    logger.info(f"[OK] Embedding Model '{config.embedding.model_name}' loaded.")
 except Exception as e:
-    log_error('ModelLoadError', f'Failed to load embedding model: {e}')
+    log_error("ModelLoadError", f"Failed to load embedding model: {e}")
     logger.critical("❌ FATAL: Embedding Model failed to load")
 
 # ---------------------------------------------------------------------------
@@ -104,12 +113,12 @@ try:
             logger.info("[OK] Firebase Admin connected.")
         else:
             logger.warning(
-                f"Firebase credentials file not found at {SERVICE_ACCOUNT_KEY}")
-            logger.warning(
-                "The app will start but Firebase queries will fail.")
+                f"Firebase credentials file not found at {SERVICE_ACCOUNT_KEY}"
+            )
+            logger.warning("The app will start but Firebase queries will fail.")
     db = firestore.client()
 except Exception as e:
-    log_error('FirebaseError', f'Firebase connection failed: {e}')
+    log_error("FirebaseError", f"Firebase connection failed: {e}")
     logger.warning("The app will start but API calls will return errors.")
 
 # ---------------------------------------------------------------------------
@@ -124,7 +133,7 @@ except Exception as e:
 #   EMBEDDING_MATRIX = np.ndarray shape (N, 384)  float32
 # ---------------------------------------------------------------------------
 FAQ_STORE = []
-EMBEDDING_MATRIX = None   # numpy matrix, rows = FAQ_STORE indices
+EMBEDDING_MATRIX = None  # numpy matrix, rows = FAQ_STORE indices
 
 
 def build_embedding_context(answer: str, questions: list) -> str:
@@ -133,7 +142,7 @@ def build_embedding_context(answer: str, questions: list) -> str:
     Must be identical to admin_tool.prepare_fact_data() to keep the
     vector space consistent.
     """
-    q_str = ' '.join(questions) if questions else ''
+    q_str = " ".join(questions) if questions else ""
     return f"Answer: {answer}. Possible Questions: {q_str}"
 
 
@@ -154,7 +163,7 @@ def load_faq_store():
     try:
         docs = list(db.collection(FAQ_COLLECTION).stream())
     except Exception as e:
-        log_error('FirestoreError', f'Failed to load FAQs: {e}')
+        log_error("FirestoreError", f"Failed to load FAQs: {e}")
         return
 
     if not docs:
@@ -169,21 +178,23 @@ def load_faq_store():
     for doc in docs:
         try:
             data = doc.to_dict()
-            emb = data.get('embedding')
+            emb = data.get("embedding")
             if emb is None:
                 logger.warning(f"FAQ {doc.id} has no embedding, skipping.")
                 continue
 
-            store.append({
-                'id': doc.id,
-                'answer': data.get('answer', ''),
-                'category': data.get('category', 'general'),
-                'keywords': set(data.get('keywords', [])),
-                'generated_questions': data.get('generated_questions', []),
-            })
+            store.append(
+                {
+                    "id": doc.id,
+                    "answer": data.get("answer", ""),
+                    "category": data.get("category", "general"),
+                    "keywords": set(data.get("keywords", [])),
+                    "generated_questions": data.get("generated_questions", []),
+                }
+            )
             vectors.append(np.array(emb, dtype=np.float32))
         except Exception as e:
-            log_error('FAQParseError', f'Error parsing FAQ {doc.id}: {e}')
+            log_error("FAQParseError", f"Error parsing FAQ {doc.id}: {e}")
             continue
 
     if not vectors:
@@ -193,9 +204,10 @@ def load_faq_store():
         return
 
     FAQ_STORE = store
-    EMBEDDING_MATRIX = np.vstack(vectors)   # shape: (N, 384)
+    EMBEDDING_MATRIX = np.vstack(vectors)  # shape: (N, 384)
     logger.info(
-        f"[OK] FAQ store loaded: {len(FAQ_STORE)} documents, {EMBEDDING_MATRIX.shape[1]} dimensions.")
+        f"[OK] FAQ store loaded: {len(FAQ_STORE)} documents, {EMBEDDING_MATRIX.shape[1]} dimensions."
+    )
 
 
 # Load at startup
@@ -236,21 +248,21 @@ def get_gemini_response(prompt: str) -> str:
     for attempt in range(attempts):
         key_index = (_current_key_index + attempt) % len(API_KEYS)
         try:
-            genai.configure(api_key=API_KEYS[key_index])
-            model = genai.GenerativeModel(
-                config.gemini.model,
-                system_instruction=SYSTEM_INSTRUCTION
+            client = genai.Client(api_key=API_KEYS[key_index])
+            response = client.models.generate_content(
+                model=config.gemini.model,
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION, timeout=config.gemini.timeout
+                ),
             )
-            response = model.generate_content(
-                prompt, request_options={"timeout": config.gemini.timeout})
-            _current_key_index = key_index   # remember the working key
-            logger.debug(
-                f"Gemini response generated successfully with key {key_index}")
+            _current_key_index = key_index  # remember the working key
+            logger.debug(f"Gemini response generated successfully with key {key_index}")
             return response.text.strip()
 
         except ResourceExhausted:
             logger.warning(f"API key [{key_index}] exhausted, rotating...")
-            time.sleep(0.5 * (attempt + 1))   # 0.5s, 1.0s, 1.5s ...
+            time.sleep(0.5 * (attempt + 1))  # 0.5s, 1.0s, 1.5s ...
             continue
 
         except InternalServerError as e:
@@ -258,13 +270,14 @@ def get_gemini_response(prompt: str) -> str:
             return "I'm having trouble connecting right now. Please try again."
 
         except Exception as e:
-            log_error('GeminiError', f'Gemini error: {e}')
+            log_error("GeminiError", f"Gemini error: {e}")
             return "I apologize, I am having trouble connecting to the AI right now."
 
     # All keys exhausted
     logger.error("All Gemini API keys exhausted")
     _current_key_index = (_current_key_index + 1) % len(API_KEYS)
     return "All AI service slots are currently busy. Please try again shortly."
+
 
 # ---------------------------------------------------------------------------
 # Keyword helpers
@@ -282,16 +295,17 @@ def get_query_keywords(text: str) -> set:
         logger.warning(f"Error extracting keywords: {e}")
         return set()
 
+
 # ---------------------------------------------------------------------------
 # Core vectorized search
 # ---------------------------------------------------------------------------
 
 
 # Score thresholds — easier to tune in one place
-RESULT_MIN_SCORE = 0.35      # minimum to appear in results
-ANSWER_MIN_SCORE = config.app.answer_min_score      # minimum to give an AI answer
-KEYWORD_BOOST = 0.12      # added per keyword overlap hit
-TOP_K = 3         # number of candidates to return
+RESULT_MIN_SCORE = 0.35  # minimum to appear in results
+ANSWER_MIN_SCORE = config.app.answer_min_score  # minimum to give an AI answer
+KEYWORD_BOOST = 0.12  # added per keyword overlap hit
+TOP_K = 3  # number of candidates to return
 
 
 def search_faqs(user_query: str) -> list:
@@ -302,7 +316,8 @@ def search_faqs(user_query: str) -> list:
     """
     if EMBEDDING_MATRIX is None or not FAQ_STORE:
         logger.warning(
-            "Search attempted but FAQ store is empty or embedding matrix not loaded")
+            "Search attempted but FAQ store is empty or embedding matrix not loaded"
+        )
         return []
 
     try:
@@ -312,42 +327,45 @@ def search_faqs(user_query: str) -> list:
         query_vec = np.array(query_vec, dtype=np.float32)
 
         # Single vectorized cosine similarity  (N,) in one call
-        norms = np.linalg.norm(EMBEDDING_MATRIX, axis=1) * \
-            np.linalg.norm(query_vec)
+        norms = np.linalg.norm(EMBEDDING_MATRIX, axis=1) * np.linalg.norm(query_vec)
         norms = np.where(norms == 0, 1e-9, norms)
-        scores = EMBEDDING_MATRIX.dot(query_vec) / norms   # shape: (N,)
+        scores = EMBEDDING_MATRIX.dot(query_vec) / norms  # shape: (N,)
 
         # Keyword boost — vectorized via list comprehension (fast enough for <10k docs)
         query_kw = get_query_keywords(user_query)
-        boosts = np.array([
-            KEYWORD_BOOST * min(len(query_kw & faq['keywords']), 3)
-            for faq in FAQ_STORE
-        ], dtype=np.float32)
+        boosts = np.array(
+            [
+                KEYWORD_BOOST * min(len(query_kw & faq["keywords"]), 3)
+                for faq in FAQ_STORE
+            ],
+            dtype=np.float32,
+        )
         scores = scores + boosts
 
         # Filter and sort
         above_threshold = np.where(scores >= RESULT_MIN_SCORE)[0]
         if len(above_threshold) == 0:
-            logger.debug(
-                f"No FAQ matches above threshold for query: {user_query[:50]}")
+            logger.debug(f"No FAQ matches above threshold for query: {user_query[:50]}")
             return []
 
-        top_indices = above_threshold[np.argsort(
-            scores[above_threshold])[::-1][:TOP_K]]
+        top_indices = above_threshold[np.argsort(scores[above_threshold])[::-1][:TOP_K]]
 
         results = []
         for idx in top_indices:
             faq = FAQ_STORE[idx]
-            results.append({
-                'answer': faq['answer'],
-                'category': faq['category'],
-                'generated_questions': faq['generated_questions'],
-                'score': float(scores[idx]),
-            })
+            results.append(
+                {
+                    "answer": faq["answer"],
+                    "category": faq["category"],
+                    "generated_questions": faq["generated_questions"],
+                    "score": float(scores[idx]),
+                }
+            )
         return results
     except Exception as e:
-        log_error('SearchError', f'Search failed: {e}')
+        log_error("SearchError", f"Search failed: {e}")
         return []
+
 
 # ---------------------------------------------------------------------------
 # LRU cache — skip search + AI for repeated identical queries
@@ -364,12 +382,15 @@ def cached_search_and_respond(user_query: str):
     """
     matches = search_faqs(user_query)
 
-    if not matches or matches[0]['score'] < ANSWER_MIN_SCORE:
+    if not matches or matches[0]["score"] < ANSWER_MIN_SCORE:
         return (
             "I couldn't find that specific information. "
             "Try asking about a department like 'Registrar', 'Clinic', or 'Library'.",
-            ["Where is the Registrar?", "Where is the Clinic?",
-                "Enrollment Requirements"],
+            [
+                "Where is the Registrar?",
+                "Where is the Clinic?",
+                "Enrollment Requirements",
+            ],
             0.0,
         )
 
@@ -383,13 +404,14 @@ def cached_search_and_respond(user_query: str):
 
     # Suggested follow-up questions come from the matched FAQ's own
     # generated_questions field (written by admin_tool at ingest time)
-    suggestions = best['generated_questions'][:4]
+    suggestions = best["generated_questions"][:4]
 
     # Fallback: surface other top matches as navigation hints
     if not suggestions and len(matches) > 1:
-        suggestions = [m['answer'][:60] + '...' for m in matches[1:]]
+        suggestions = [m["answer"][:60] + "..." for m in matches[1:]]
 
-    return response_text, suggestions, best['score']
+    return response_text, suggestions, best["score"]
+
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -402,7 +424,8 @@ def cached_search_and_respond(user_query: str):
 def handle_api_error(error):
     """Handle custom API errors."""
     response, status_code = create_error_response(
-        error.error_type, error.message, error.status_code)
+        error.error_type, error.message, error.status_code
+    )
     return jsonify(response), status_code
 
 
@@ -410,45 +433,47 @@ def handle_api_error(error):
 def handle_bad_request(error):
     """Handle bad request errors."""
     response, status_code = create_error_response(
-        'BadRequest', 'Invalid request format')
+        "BadRequest", "Invalid request format"
+    )
     return jsonify(response), status_code
 
 
 @app.errorhandler(404)
 def handle_not_found(error):
     """Handle 404 errors."""
-    response, status_code = create_error_response(
-        'NotFound', 'Resource not found', 404)
+    response, status_code = create_error_response("NotFound", "Resource not found", 404)
     return jsonify(response), status_code
 
 
 @app.errorhandler(500)
 def handle_internal_error(error):
     """Handle internal server errors."""
-    log_error('InternalServerError', str(error))
+    log_error("InternalServerError", str(error))
     response, status_code = create_error_response(
-        'InternalServerError', 'An unexpected error occurred')
+        "InternalServerError", "An unexpected error occurred"
+    )
     return jsonify(response), status_code
 
 
-@app.route('/')
+@app.route("/")
 def index():
     """Serve the main HTML template."""
     try:
         return render_template(
-            'index.html',
+            "index.html",
             fb_api_key=os.getenv("FIREBASE_API_KEY"),
             fb_project_id=os.getenv("FIREBASE_PROJECT_ID"),
             fb_app_id=os.getenv("FIREBASE_APP_ID"),
         )
     except Exception as e:
-        log_error('TemplateError', f'Failed to render index template: {e}')
+        log_error("TemplateError", f"Failed to render index template: {e}")
         response, status_code = create_error_response(
-            'TemplateError', 'Failed to load page')
+            "TemplateError", "Failed to load page"
+        )
         return jsonify(response), status_code
 
 
-@app.route('/api/v1/ask', methods=['POST'])
+@app.route("/api/v1/ask", methods=["POST"])
 @limiter.limit(f"{config.rate_limit.requests_per_minute}/minute")
 def handle_ask_query():
     """Handle user questions via semantic search + AI."""
@@ -459,58 +484,69 @@ def handle_ask_query():
             raise ValidationError("Request body must be valid JSON")
 
         # Validate required fields
-        validate_api_request(data, ['query'])
+        validate_api_request(data, ["query"])
 
         # Sanitize and validate input
-        user_query = validate_query(
-            data['query'], config.security.max_query_length)
+        user_query = validate_query(data["query"], config.security.max_query_length)
 
         logger.info(f"🗣️  User query: {user_query[:50]}...")
 
         # Log query to analytics if enabled
-        if os.getenv('ENABLE_ANALYTICS', 'True').lower() == 'true':
+        if os.getenv("ENABLE_ANALYTICS", "True").lower() == "true":
             try:
                 if db:
-                    db.collection(QUERY_LOGS_COLLECTION).document().set({
-                        'query': user_query,
-                        'timestamp': firestore.SERVER_TIMESTAMP,
-                    })
+                    db.collection(QUERY_LOGS_COLLECTION).document().set(
+                        {
+                            "query": user_query,
+                            "timestamp": firestore.SERVER_TIMESTAMP,
+                        }
+                    )
             except Exception as e:
                 logger.warning(f"Failed to log query to analytics: {e}")
 
         # Get response
         response_text, suggested_questions, match_score = cached_search_and_respond(
-            user_query)
+            user_query
+        )
 
         duration_ms = (time.time() - start_time) * 1000
-        log_api_call('/api/v1/ask', 'POST', 200, duration_ms, user_query)
+        log_api_call("/api/v1/ask", "POST", 200, duration_ms, user_query)
 
         logger.info(
-            f"[OK] Response sent - Score: {match_score:.2f} - Duration: {duration_ms:.1f}ms")
+            f"[OK] Response sent - Score: {match_score:.2f} - Duration: {duration_ms:.1f}ms"
+        )
 
-        return jsonify(create_success_response({
-            "response": response_text,
-            "match_score": f"{match_score:.2f}",
-            "suggested_questions": suggested_questions,
-        }, "Query processed successfully")), 200
+        return (
+            jsonify(
+                create_success_response(
+                    {
+                        "response": response_text,
+                        "match_score": f"{match_score:.2f}",
+                        "suggested_questions": suggested_questions,
+                    },
+                    "Query processed successfully",
+                )
+            ),
+            200,
+        )
 
     except ValidationError as e:
         duration_ms = (time.time() - start_time) * 1000
-        log_api_call('/api/v1/ask', 'POST', 400, duration_ms)
-        response, status_code = create_error_response(
-            'ValidationError', str(e))
+        log_api_call("/api/v1/ask", "POST", 400, duration_ms)
+        response, status_code = create_error_response("ValidationError", str(e))
         return jsonify(response), status_code
 
     except Exception as e:
         duration_ms = (time.time() - start_time) * 1000
-        log_api_call('/api/v1/ask', 'POST', 500, duration_ms)
-        log_error('QueryError', f'Query processing failed: {e}')
+        log_api_call("/api/v1/ask", "POST", 500, duration_ms)
+        log_error("QueryError", f"Query processing failed: {e}")
         response, status_code = create_error_response(
-            'InternalServerError', 'Failed to process query')
+            "InternalServerError", "Failed to process query"
+        )
         return jsonify(response), status_code
 
 
-@app.route('/api/v1/reload', methods=['POST'])
+@app.route("/api/v1/reload", methods=["POST"])
 def reload_faq_store():
     """
     Admin endpoint — call this after adding/editing FAQs via admin_tool.py
@@ -518,13 +554,16 @@ def reload_faq_store():
     Protect this with a secret header in production.
     """
     try:
-        secret = request.headers.get('X-Reload-Secret', '')
-        expected = os.getenv('RELOAD_SECRET', '')
+        secret = request.headers.get("X-Reload-Secret", "")
+        expected = os.getenv("RELOAD_SECRET", "")
         if expected and secret != expected:
             log_error(
-                'Unauthorized', f'Reload attempted with invalid secret from {request.remote_addr}')
+                "Unauthorized",
+                f"Reload attempted with invalid secret from {request.remote_addr}",
+            )
             response, status_code = create_error_response(
-                'Unauthorized', 'Invalid credentials', 401)
+                "Unauthorized", "Invalid credentials", 401
+            )
             return jsonify(response), status_code
 
         logger.info("📤 Reloading FAQ store...")
@@ -533,30 +572,43 @@ def reload_faq_store():
         load_faq_store()
         logger.info(f"✅ FAQ store reloaded: {len(FAQ_STORE)} documents")
 
-        return jsonify(create_success_response({
-            "faq_count": len(FAQ_STORE),
-            "embedding_matrix_shape": EMBEDDING_MATRIX.shape if EMBEDDING_MATRIX is not None else None
-        }, "FAQ store reloaded successfully")), 200
+        return (
+            jsonify(
+                create_success_response(
+                    {
+                        "faq_count": len(FAQ_STORE),
+                        "embedding_matrix_shape": EMBEDDING_MATRIX.shape
+                        if EMBEDDING_MATRIX is not None
+                        else None,
+                    },
+                    "FAQ store reloaded successfully",
+                )
+            ),
+            200,
+        )
 
     except Exception as e:
-        log_error('ReloadError', f'Failed to reload FAQ store: {e}')
+        log_error("ReloadError", f"Failed to reload FAQ store: {e}")
         response, status_code = create_error_response(
-            'InternalServerError', 'Failed to reload FAQ store')
+            "InternalServerError", "Failed to reload FAQ store"
+        )
         return jsonify(response), status_code
 
 
-@app.route('/api/v1/health', methods=['GET'])
+@app.route("/api/v1/health", methods=["GET"])
 def health_check():
     """Comprehensive health check endpoint."""
     try:
-        firebase_status = 'connected' if db is not None else 'disconnected'
-        embeddings_status = 'loaded' if EMBEDDING_MODEL is not None else 'not_loaded'
+        firebase_status = "connected" if db is not None else "disconnected"
+        embeddings_status = "loaded" if EMBEDDING_MODEL is not None else "not_loaded"
 
         health_data = {
             "status": "healthy",
             "environment": config.environment,
             "faq_count": len(FAQ_STORE),
-            "embedding_matrix_shape": list(EMBEDDING_MATRIX.shape) if EMBEDDING_MATRIX is not None else None,
+            "embedding_matrix_shape": list(EMBEDDING_MATRIX.shape)
+            if EMBEDDING_MATRIX is not None
+            else None,
             "model_loaded": EMBEDDING_MODEL is not None,
             "model_name": config.embedding.model_name,
             "firebase_status": firebase_status,
@@ -574,13 +626,14 @@ def health_check():
         return jsonify(create_success_response(health_data, "System is healthy")), 200
 
     except Exception as e:
-        log_error('HealthCheckError', f'Health check failed: {e}')
+        log_error("HealthCheckError", f"Health check failed: {e}")
         response, status_code = create_error_response(
-            'InternalServerError', 'Health check failed')
+            "InternalServerError", "Health check failed"
+        )
         return jsonify(response), status_code
 
 
-@app.route('/api/v1/analytics', methods=['GET'])
+@app.route("/api/v1/analytics", methods=["GET"])
 def get_analytics():
     """
     Get query analytics. Admin-only endpoint.
@@ -591,73 +644,104 @@ def get_analytics():
     """
     try:
         # Check admin authentication
-        secret = request.args.get('secret', '')
-        expected = os.getenv('RELOAD_SECRET', '')
+        secret = request.args.get("secret", "")
+        expected = os.getenv("RELOAD_SECRET", "")
         if expected and secret != expected:
             log_error(
-                'Unauthorized', f'Analytics requested without valid secret from {request.remote_addr}')
+                "Unauthorized",
+                f"Analytics requested without valid secret from {request.remote_addr}",
+            )
             response, status_code = create_error_response(
-                'Unauthorized', 'Invalid credentials', 401)
+                "Unauthorized", "Invalid credentials", 401
+            )
             return jsonify(response), status_code
 
-        limit = min(int(request.args.get('limit', 100)), 1000)
+        limit = min(int(request.args.get("limit", 100)), 1000)
 
         logger.info(f"📊 Analytics requested (limit: {limit})")
 
         # Try to fetch from Firebase
         if db is None or QUERY_LOGS_COLLECTION is None:
             logger.warning("Analytics unavailable - Firebase not connected")
-            return jsonify(create_success_response({
-                "total_queries": 0,
-                "recent_queries": [],
-                "message": "Analytics data unavailable"
-            }, "Analytics (limited mode)")), 200
+            return (
+                jsonify(
+                    create_success_response(
+                        {
+                            "total_queries": 0,
+                            "recent_queries": [],
+                            "message": "Analytics data unavailable",
+                        },
+                        "Analytics (limited mode)",
+                    )
+                ),
+                200,
+            )
 
         try:
             # Fetch recent queries from Firebase
-            query_logs = db.collection(QUERY_LOGS_COLLECTION)\
-                .order_by('timestamp', direction=firestore.Query.DESCENDING)\
-                .limit(limit)\
+            query_logs = (
+                db.collection(QUERY_LOGS_COLLECTION)
+                .order_by("timestamp", direction=firestore.Query.DESCENDING)
+                .limit(limit)
                 .stream()
+            )
 
             queries = []
             for doc in query_logs:
                 data = doc.to_dict()
-                queries.append({
-                    'query': data.get('query', ''),
-                    'timestamp': data.get('timestamp', ''),
-                })
+                queries.append(
+                    {
+                        "query": data.get("query", ""),
+                        "timestamp": data.get("timestamp", ""),
+                    }
+                )
 
             logger.info(f"✅ Returned {len(queries)} analytics records")
 
-            return jsonify(create_success_response({
-                "total_queries": len(queries),
-                "recent_queries": queries,
-                "cache_stats": {
-                    "hits": cached_search_and_respond.cache_info().hits,
-                    "misses": cached_search_and_respond.cache_info().misses,
-                    "cached_size": cached_search_and_respond.cache_info().currsize
-                }
-            }, "Analytics retrieved successfully")), 200
+            return (
+                jsonify(
+                    create_success_response(
+                        {
+                            "total_queries": len(queries),
+                            "recent_queries": queries,
+                            "cache_stats": {
+                                "hits": cached_search_and_respond.cache_info().hits,
+                                "misses": cached_search_and_respond.cache_info().misses,
+                                "cached_size": cached_search_and_respond.cache_info().currsize,
+                            },
+                        },
+                        "Analytics retrieved successfully",
+                    )
+                ),
+                200,
+            )
 
         except Exception as e:
-            log_error('FirestoreAnalyticsError',
-                      f'Failed to fetch analytics: {e}')
-            return jsonify(create_success_response({
-                "total_queries": 0,
-                "recent_queries": [],
-                "cache_stats": {
-                    "hits": cached_search_and_respond.cache_info().hits,
-                    "misses": cached_search_and_respond.cache_info().misses,
-                    "cached_size": cached_search_and_respond.cache_info().currsize
-                },
-                "message": "Partial analytics available"
-            }, "Analytics (cache only)")), 200
+            log_error("FirestoreAnalyticsError", f"Failed to fetch analytics: {e}")
+            return (
+                jsonify(
+                    create_success_response(
+                        {
+                            "total_queries": 0,
+                            "recent_queries": [],
+                            "cache_stats": {
+                                "hits": cached_search_and_respond.cache_info().hits,
+                                "misses": cached_search_and_respond.cache_info().misses,
+                                "cached_size": cached_search_and_respond.cache_info().currsize,
+                            },
+                            "message": "Partial analytics available",
+                        },
+                        "Analytics (cache only)",
+                    )
+                ),
+                200,
+            )
 
     except Exception as e:
-        log_error('AnalyticsError', f'Analytics endpoint error: {e}')
+        log_error("AnalyticsError", f"Analytics endpoint error: {e}")
         response, status_code = create_error_response(
-            'InternalServerError', 'Failed to retrieve analytics')
+            "InternalServerError", "Failed to retrieve analytics"
+        )
         return jsonify(response), status_code
 
 
@@ -670,19 +754,19 @@ def log_request():
 @app.after_request
 def add_security_headers(response):
     """Add security headers to all responses."""
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
     return response
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     port = config.app.port
     debug_mode = config.app.debug
 
-    logger.info("\n" + "="*60)
+    logger.info("\n" + "=" * 60)
     logger.info("[START] Campus Guide Kiosk Starting Up")
-    logger.info("="*60)
+    logger.info("=" * 60)
     logger.info(f"Environment: {config.environment}")
     logger.info(f"Port: {port}")
     logger.info(f"Debug Mode: {debug_mode}")
@@ -691,8 +775,8 @@ if __name__ == '__main__':
     logger.info(f"API Keys Configured: {len(API_KEYS)}")
     logger.info(f"FAQs in Memory: {len(FAQ_STORE)}")
     logger.info(
-        f"Rate Limiting: {'Enabled' if config.rate_limit.enabled else 'Disabled'}")
-    logger.info("="*60 + "\n")
+        f"Rate Limiting: {'Enabled' if config.rate_limit.enabled else 'Disabled'}"
+    )
+    logger.info("=" * 60 + "\n")
 
-    app.run(host=config.app.host, port=port,
-            debug=debug_mode, use_reloader=False)
+    app.run(host=config.app.host, port=port, debug=debug_mode, use_reloader=False)

@@ -14,20 +14,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_environment():
     """Setup test environment variables."""
-    os.environ['ENVIRONMENT'] = 'testing'
-    os.environ['LOG_LEVEL'] = 'DEBUG'
-    os.environ['RATE_LIMIT_ENABLED'] = 'False'
+    os.environ["ENVIRONMENT"] = "testing"
+    os.environ["LOG_LEVEL"] = "DEBUG"
+    os.environ["RATE_LIMIT_ENABLED"] = "False"
     yield
 
 
 @pytest.fixture
 def mock_firebase():
     """Mock Firebase client."""
-    with patch('firebase_admin._apps', []):
-        with patch('firebase_admin.initialize_app'):
-            with patch('firebase_admin.credentials.Certificate'):
+    with patch("firebase_admin._apps", []):
+        with patch("firebase_admin.initialize_app"):
+            with patch("firebase_admin.credentials.Certificate"):
                 mock_db = MagicMock()
-                with patch('firebase_admin.firestore.client', return_value=mock_db):
+                with patch("firebase_admin.firestore.client", return_value=mock_db):
                     yield mock_db
 
 

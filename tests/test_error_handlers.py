@@ -7,8 +7,12 @@ import json
 import numpy as np
 from unittest.mock import patch, MagicMock, Mock
 from error_handlers import (
-    sanitize_input, validate_query, ValidationError,
-    validate_api_request, create_success_response, create_error_response
+    sanitize_input,
+    validate_query,
+    ValidationError,
+    validate_api_request,
+    create_success_response,
+    create_error_response,
 )
 
 
@@ -72,40 +76,40 @@ class TestAPIValidation:
 
     def test_validate_api_request_valid(self):
         """Test validating valid API request."""
-        data = {'query': 'Where is the library?', 'extra': 'field'}
-        result = validate_api_request(data, ['query'])
+        data = {"query": "Where is the library?", "extra": "field"}
+        result = validate_api_request(data, ["query"])
         assert result == data
 
     def test_validate_api_request_missing_field(self):
         """Test validating API request with missing required field."""
-        data = {'other_field': 'value'}
+        data = {"other_field": "value"}
         with pytest.raises(ValidationError) as exc_info:
-            validate_api_request(data, ['query'])
+            validate_api_request(data, ["query"])
         assert "Missing required field: query" in str(exc_info.value)
 
     def test_validate_api_request_empty_data(self):
         """Test validating empty API request."""
         with pytest.raises(ValidationError) as exc_info:
-            validate_api_request({}, ['query'])
+            validate_api_request({}, ["query"])
         assert "Request body cannot be empty" in str(exc_info.value)
 
     def test_validate_api_request_none_data(self):
         """Test validating None API request."""
         with pytest.raises(ValidationError) as exc_info:
-            validate_api_request(None, ['query'])
+            validate_api_request(None, ["query"])
         assert "cannot be empty" in str(exc_info.value)
 
     def test_validate_api_request_multiple_fields(self):
         """Test validating request with multiple required fields."""
-        data = {'query': 'test', 'category': 'general'}
-        result = validate_api_request(data, ['query', 'category'])
+        data = {"query": "test", "category": "general"}
+        result = validate_api_request(data, ["query", "category"])
         assert result == data
 
     def test_validate_api_request_missing_one_of_many(self):
         """Test validating request missing one of multiple required fields."""
-        data = {'query': 'test'}
+        data = {"query": "test"}
         with pytest.raises(ValidationError) as exc_info:
-            validate_api_request(data, ['query', 'category'])
+            validate_api_request(data, ["query", "category"])
         assert "Missing required field: category" in str(exc_info.value)
 
 
@@ -114,24 +118,23 @@ class TestResponseFormatting:
 
     def test_create_success_response(self):
         """Test creating success response."""
-        data = {'result': 'test'}
-        response = create_success_response(data, 'Test message')
-        assert response['status'] == 'success'
-        assert response['message'] == 'Test message'
-        assert response['data'] == data
+        data = {"result": "test"}
+        response = create_success_response(data, "Test message")
+        assert response["status"] == "success"
+        assert response["message"] == "Test message"
+        assert response["data"] == data
 
     def test_create_error_response(self):
         """Test creating error response."""
-        response, status = create_error_response(
-            'TestError', 'Test error message', 400)
-        assert response['status'] == 'error'
-        assert response['error'] == 'TestError'
-        assert response['message'] == 'Test error message'
+        response, status = create_error_response("TestError", "Test error message", 400)
+        assert response["status"] == "error"
+        assert response["error"] == "TestError"
+        assert response["message"] == "Test error message"
         assert status == 400
 
     def test_create_error_response_default_status(self):
         """Test creating error response with default status code."""
-        response, status = create_error_response('TestError', 'Test error')
+        response, status = create_error_response("TestError", "Test error")
         assert status == 400
 
 
@@ -141,16 +144,17 @@ class TestErrorExceptions:
     def test_validation_error(self):
         """Test ValidationError."""
         error = ValidationError("Test message")
-        assert error.error_type == 'ValidationError'
+        assert error.error_type == "ValidationError"
         assert error.status_code == 400
         assert str(error) == "Test message"
 
     def test_validation_error_is_api_error(self):
         """Test ValidationError inherits from APIError."""
         from error_handlers import APIError
+
         error = ValidationError("Test")
         assert isinstance(error, APIError)
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

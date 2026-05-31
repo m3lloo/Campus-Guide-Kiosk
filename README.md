@@ -234,7 +234,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions.
 
 See [requirements.txt](requirements.txt) for full list. Key packages:
 - **Flask** - Web framework
-- **google-generativeai** - Gemini API
+- **google-genai** - Gemini API (Google's latest Generative AI library)
 - **firebase-admin** - Firebase integration
 - **sentence-transformers** - Semantic embeddings
 - **nltk** - Natural language processing

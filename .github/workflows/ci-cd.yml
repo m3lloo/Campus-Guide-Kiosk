@@ -41,11 +41,11 @@ jobs:
         pip install pylint
         pylint app.py config.py error_handlers.py logging_config.py --disable=C0114,C0115,C0116 || true
     
-    - name: Format check with black
+    - name: Format code with black
       continue-on-error: true
       run: |
         pip install black
-        black --check --diff . || true
+        black . || true
     
     - name: Run tests with pytest
       run: |
