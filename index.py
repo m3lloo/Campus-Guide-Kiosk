@@ -333,8 +333,9 @@ def notify_app_reload():
         resp = _requests.post(APP_RELOAD_URL, headers=headers, timeout=5)
         if resp.ok:
             data = resp.json()
+            faq_count = data.get('data', {}).get('faq_count', '?')
             print(
-                f"✅ App store reloaded. FAQs in memory: {data.get('faq_count', '?')}")
+                f"✅ App store reloaded. FAQs in memory: {faq_count}")
         else:
             print(f"⚠️  Reload endpoint returned {resp.status_code}")
     except Exception as e:
