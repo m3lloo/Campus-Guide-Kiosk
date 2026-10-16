@@ -11,8 +11,11 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12']
+        # Test what ships: the Dockerfile uses 3.11, and the pinned
+        # torch==2.0.0 / numpy==1.24.0 have no wheels for 3.12.
+        python-version: ['3.11']
 
     steps:
     - uses: actions/checkout@v4
@@ -33,6 +36,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        # CPU-only torch: the default wheel drags in several GB of CUDA libraries.
+        pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cpu
         pip install -r requirements-dev.txt
 
     - name: Lint (undefined names, unused imports and variables)
