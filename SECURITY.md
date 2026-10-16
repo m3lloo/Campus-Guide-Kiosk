@@ -275,10 +275,10 @@ safety check
 pip install --upgrade flask
 
 # Update all
-pip install --upgrade -r requirements.txt
+pip install --upgrade -r requirements-dev.txt
 
 # Update requirements.txt
-pip freeze > requirements.txt
+pip freeze   # review the output, then update the pinned versions in requirements.txt by hand
 ```
 
 ### Pinned Versions

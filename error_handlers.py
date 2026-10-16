@@ -2,10 +2,10 @@
 Error handling, validation, and security utilities.
 """
 
+import hmac
 import re
 from typing import Any, Tuple
-from flask import jsonify
-from logging_config import logger, log_error
+from logging_config import log_error
 
 
 class APIError(Exception):
@@ -139,9 +139,25 @@ def error_response(error: Exception) -> Tuple[dict, int]:
     }, 500
 
 
-def validate_query(query: str, max_length: int = 500) -> str:
+def validate_query(query: Any, max_length: int = 500) -> str:
     """Validate and sanitize user query."""
-    return sanitize_input(query.strip(), max_length)
+    # sanitize_input() already rejects non-str/empty input (and strips it),
+    # so there's no need to duplicate that isinstance check here.
+    return sanitize_input(query, max_length)
+
+
+def check_admin_secret(provided: str, expected: str) -> bool:
+    """
+    Constant-time comparison for admin secrets (X-Reload-Secret / ?secret=).
+    Returns True if access should be allowed:
+      - if no secret is configured (expected is empty), access is allowed
+        (dev convenience — callers should log a warning at startup instead)
+      - otherwise the provided secret must match exactly, compared in
+        constant time to avoid leaking the secret via response timing.
+    """
+    if not expected:
+        return True
+    return hmac.compare_digest(provided or "", expected)
 
 
 def create_success_response(data: Any = None, message: str = "Success") -> dict:

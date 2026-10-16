@@ -3,9 +3,6 @@ Unit tests for Campus Guide Kiosk
 """
 
 import pytest
-import json
-import numpy as np
-from unittest.mock import patch, MagicMock, Mock
 from error_handlers import (
     sanitize_input,
     validate_query,
@@ -13,6 +10,7 @@ from error_handlers import (
     validate_api_request,
     create_success_response,
     create_error_response,
+    check_admin_secret,
 )
 
 
@@ -69,6 +67,21 @@ class TestInputValidation:
         """Test query validation with invalid input."""
         with pytest.raises(ValidationError):
             validate_query("'; DROP TABLE;")
+
+    def test_validate_query_non_string_int(self):
+        """Non-string query input must raise ValidationError, not crash (regression)."""
+        with pytest.raises(ValidationError):
+            validate_query(12345)
+
+    def test_validate_query_non_string_list(self):
+        """A list/dict body for 'query' must raise ValidationError, not AttributeError."""
+        with pytest.raises(ValidationError):
+            validate_query(["not", "a", "string"])
+
+    def test_validate_query_none(self):
+        """None query must raise ValidationError, not crash."""
+        with pytest.raises(ValidationError):
+            validate_query(None)
 
 
 class TestAPIValidation:
@@ -136,6 +149,25 @@ class TestResponseFormatting:
         """Test creating error response with default status code."""
         response, status = create_error_response("TestError", "Test error")
         assert status == 400
+
+
+class TestAdminSecretCheck:
+    """Test the constant-time admin secret comparison used by admin endpoints."""
+
+    def test_no_secret_configured_allows_access(self):
+        """When RELOAD_SECRET is unset (empty expected), access is allowed (dev mode)."""
+        assert check_admin_secret("anything", "") is True
+        assert check_admin_secret("", "") is True
+
+    def test_correct_secret_allows_access(self):
+        assert check_admin_secret("s3cr3t", "s3cr3t") is True
+
+    def test_wrong_secret_denies_access(self):
+        assert check_admin_secret("wrong", "s3cr3t") is False
+
+    def test_missing_provided_secret_denies_access(self):
+        assert check_admin_secret(None, "s3cr3t") is False
+        assert check_admin_secret("", "s3cr3t") is False
 
 
 class TestErrorExceptions:

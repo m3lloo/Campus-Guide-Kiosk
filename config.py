@@ -5,7 +5,6 @@ Centralizes all configuration using environment variables and dataclasses.
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -43,7 +42,7 @@ class GeminiConfig:
         ]
     )
     model: str = field(
-        default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     )
     timeout: int = field(default_factory=lambda: int(os.getenv("GEMINI_TIMEOUT", 30)))
 
@@ -74,6 +73,16 @@ class AppConfig:
         default_factory=lambda: int(os.getenv("CACHE_MAX_SIZE", 128))
     )
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
+    # Number of trusted reverse proxy hops in front of this app (e.g. nginx = 1).
+    # When > 0, Flask trusts X-Forwarded-For/X-Forwarded-Proto from that many
+    # hops so rate limiting and logging see the real client IP. Leave at 0
+    # (default) when the app is reachable directly — otherwise clients could
+    # spoof their IP via those headers and bypass rate limiting.
+    trusted_proxy_count: int = field(
+        # `or 0` (not just the getenv default) so a blank TRUSTED_PROXY_COUNT=
+        # in .env falls back to 0 instead of crashing the app on int("").
+        default_factory=lambda: int(os.getenv("TRUSTED_PROXY_COUNT") or 0)
+    )
 
 
 @dataclass

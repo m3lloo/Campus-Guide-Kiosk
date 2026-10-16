@@ -426,10 +426,10 @@ curl -X POST http://localhost:5000/api/v1/ask \
 **Problem:** Server-side error
 
 **Solution:**
-- Check server logs: `docker-compose logs web`
+- Check server logs: `docker compose logs web`
 - Verify Firebase connection
 - Ensure Gemini API keys are valid
-- Restart application: `docker-compose restart web`
+- Restart application: `docker compose restart web`
 
 ---
 

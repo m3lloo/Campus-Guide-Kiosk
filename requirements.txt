@@ -1,7 +1,11 @@
-# Web Framework
+# Runtime dependencies (installed in the Docker image).
+# Development and test tools live in requirements-dev.txt.
+
+# Web framework
 Flask==3.0.0
 python-dotenv==1.0.0
 Flask-Limiter==3.5.0
+Flask-Cors==6.0.5
 
 # AI & ML
 google-genai==0.1.0
@@ -15,21 +19,8 @@ firebase-admin==7.0.0
 # NLP
 nltk==3.8.0
 
-# Production deployment
+# HTTP client (admin tool notifies the running app to reload)
+requests==2.32.3
+
+# Production server
 gunicorn==21.0.0
-
-# API Documentation
-flask-restx==0.5.1
-
-# Development & Testing
-pytest==7.0.0
-pytest-cov==4.0.0
-black==22.12.0
-pylint==2.17.0
-flake8==6.0.0
-
-# Optional: Error tracking
-# sentry-sdk==1.40.0
-
-# Optional: Database migrations
-# Alembic==1.12.0

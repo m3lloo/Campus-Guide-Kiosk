@@ -1,13 +1,15 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getFirestore, onSnapshot, collection, query, orderBy } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
+import * as fx from "./fx.js";
+
 const API_ENDPOINT = '/api/v1/ask';
 const firebaseConfig = {
     apiKey: window.env.FIREBASE_API_KEY,
     authDomain: `${window.env.FIREBASE_PROJECT_ID}.firebaseapp.com`,
     projectId: window.env.FIREBASE_PROJECT_ID,
     storageBucket: `${window.env.FIREBASE_PROJECT_ID}.firebasestorage.app`,
-    messagingSenderId: "595009798998",
+    messagingSenderId: "24452620493",
     appId: window.env.FIREBASE_APP_ID,
 };
 
@@ -20,9 +22,10 @@ let myKeyboard;
 let currentDepartmentFilter = 'All';
 
 let previousSectionId = 'home-section';
-let currentAlertTimer = null;
 
 let isUnityLoaded = false;
+let isUnityLoading = false;
+let pendingMapSearchQuery = null;
 window.unityInstance = null;
 const BASE_UNITY_PATH = 'static/unity/';
 const UNITY_LOADER_SCRIPT_PATH = BASE_UNITY_PATH + 'testMapWeb.loader.js';
@@ -33,6 +36,9 @@ const UNITY_WASM_FILE = BASE_UNITY_PATH + 'testMapWeb.wasm.unityweb';
 let isProcessing = false;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 let idleTimer;
+let idleDismissing = false;
+let previousNavTarget = 'home-section';
+let mapSettled = Promise.resolve(); // resolves when the map-open animation has finished
 let isKioskOnline = true;
 
 const DEPARTMENT_MAP = {
@@ -69,6 +75,14 @@ Object.keys(locations).forEach(main => {
     });
 });
 
+// Escapes HTML-significant characters so dynamic content (AI answers,
+// Firestore event data) can be safely interpolated into innerHTML templates.
+function escapeHtml(str) {
+    return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+}
+
 function levenshtein(a, b) {
     if (!a.length) return b.length;
     if (!b.length) return a.length;
@@ -93,19 +107,18 @@ function findClosestMatch(input) {
 }
 
 // --- IDLE TIMER ---
-function resetIdleTimer() {
+function resetIdleTimer(e) {
     clearTimeout(idleTimer);
     const idleOverlay = document.getElementById('idle-overlay');
-    if (idleOverlay) {
+    if (idleOverlay && !idleDismissing) {
         const style = getComputedStyle(idleOverlay);
         if (style.display !== 'none' && style.opacity !== '0') {
-            idleOverlay.style.opacity = '0';
-            idleOverlay.style.pointerEvents = 'none';
-            setTimeout(() => {
-                idleOverlay.style.display = 'none';
-                idleOverlay.style.pointerEvents = 'auto';
-            }, 500);
+            idleDismissing = true;
+            // Where the tap landed, so the ripple blooms from the finger.
+            const p = e?.touches?.[0] ?? e;
+            const point = p && Number.isFinite(p.clientX) ? { x: p.clientX, y: p.clientY } : null;
             navigateTo('home-section');
+            fx.idleHide(idleOverlay, point).finally(() => { idleDismissing = false; });
         }
     }
     idleTimer = setTimeout(showIdleOverlay, IDLE_TIMEOUT_MS);
@@ -113,12 +126,7 @@ function resetIdleTimer() {
 
 function showIdleOverlay() {
     const idleOverlay = document.getElementById('idle-overlay');
-    if (idleOverlay) {
-        idleOverlay.style.display = 'flex';
-        void idleOverlay.offsetWidth;
-        idleOverlay.style.opacity = '1';
-        idleOverlay.style.pointerEvents = 'auto';
-    }
+    if (idleOverlay) fx.idleShow(idleOverlay);
 }
 
 function updateButtonStatus(isOnline) {
@@ -137,31 +145,19 @@ function checkNetworkStatus() {
     const wasOnline = isKioskOnline;
     isKioskOnline = navigator.onLine;
 
-    const idleOverlay = document.getElementById('idle-overlay');
+    // Idle screen swaps between two prebuilt states instead of rewriting its
+    // innerHTML (which used to destroy the clock elements).
+    document.getElementById('idle-online')?.classList.toggle('hidden', !isKioskOnline);
+    document.getElementById('idle-offline')?.classList.toggle('hidden', isKioskOnline);
 
-    if (!isKioskOnline) {
-        if (statusEl) {
-            statusEl.className = 'w-full text-center py-4 px-1 leading-tight border-b border-gray-700 mt-2 net-offline hidden md:block';
-            statusEl.innerHTML = `<i class="material-icons text-3xl mb-1">signal_cellular_off</i><span class="text-xs font-bold tracking-widest block">OFFLINE</span>`;
-        }
-        if (idleOverlay && idleOverlay.style.display !== 'none') {
-            idleOverlay.innerHTML = `<i class="material-icons text-red-500 text-6xl md:text-[10rem] mb-6">cloud_off</i><h1 class="text-3xl md:text-7xl font-extrabold mb-4 text-red-500">OFFLINE</h1><p class="text-xl md:text-4xl text-gray-300">Check internet connection.</p>`;
-        }
-    } else {
-        if (statusEl) {
-            statusEl.className = 'w-full text-center py-4 px-1 leading-tight border-b border-gray-700 mt-2 net-good hidden md:block';
-            statusEl.innerHTML = `<i class="material-icons text-3xl mb-1">signal_cellular_alt</i><span class="text-xs font-bold tracking-widest block">ONLINE</span>`;
-        }
-        if (!wasOnline && idleOverlay && idleOverlay.querySelector('.text-red-500')) {
-            idleOverlay.innerHTML = `
-                <div class="absolute top-6 right-6 md:top-12 md:right-12 text-right">
-                    <div id="splash-time" class="text-5xl md:text-8xl font-bold text-white mb-2">--:--</div>
-                </div>
-                <i class="material-icons text-8xl md:text-[10rem] mb-6 animate-pulse" style="color: var(--primary-neon);">touch_app</i>
-                <h1 class="text-4xl md:text-7xl font-extrabold mb-4" style="color: var(--secondary-neon);">Campus Guide</h1>
-                <p class="text-xl md:text-4xl text-gray-300">Tap anywhere to start</p>`;
-        }
+    if (statusEl) {
+        statusEl.classList.toggle('net-offline', !isKioskOnline);
+        statusEl.classList.toggle('net-good', isKioskOnline);
+        statusEl.innerHTML = isKioskOnline
+            ? `<i class="material-icons" aria-hidden="true">signal_cellular_alt</i><span class="label">ONLINE</span>`
+            : `<i class="material-icons" aria-hidden="true">signal_cellular_off</i><span class="label">OFFLINE</span>`;
     }
+    if (wasOnline !== isKioskOnline && statusEl) fx.fadeIn(statusEl, { y: 0, duration: 0.5 });
     updateButtonStatus(isKioskOnline);
 }
 
@@ -171,8 +167,16 @@ function updateDateTime() {
     const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     const el = document.getElementById('datetime');
     if (el) el.innerHTML = `${dateStr}<br>${timeStr}`;
-    const splashTime = document.getElementById('splash-time');
-    if (splashTime) splashTime.innerText = timeStr;
+
+    const longDate = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    const setText = (id, text) => { const n = document.getElementById(id); if (n && n.textContent !== text) n.textContent = text; };
+    setText('splash-time', timeStr);
+    setText('splash-date', longDate);
+    setText('home-time', timeStr);
+    setText('home-date', longDate);
+
+    const hour = now.getHours();
+    setText('home-greeting', hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening');
 }
 
 function alertBox(message) {
@@ -182,23 +186,21 @@ function alertBox(message) {
 
     const div = document.createElement('div');
     div.className = 'kiosk-alert';
+    div.setAttribute('role', 'status');
 
+    const lower = message.toLowerCase();
     let icon = 'info';
-    if (message.toLowerCase().includes('error')) icon = 'error';
-    if (message.toLowerCase().includes('success')) icon = 'check_circle';
-    if (message.toLowerCase().includes('offline')) icon = 'cloud_off';
-    if (message.toLowerCase().includes('emergency')) icon = 'warning';
+    if (lower.includes('error')) icon = 'error';
+    if (lower.includes('success')) icon = 'check_circle';
+    if (lower.includes('offline')) icon = 'cloud_off';
+    if (lower.includes('emergency')) { icon = 'warning'; div.classList.add('danger'); }
 
-    // Icon color uses primary crimson
-    div.innerHTML = `<i class="material-icons mr-2" style="font-size: 1.5rem; color: var(--primary-neon);">${icon}</i><span>${message}</span>`;
+    div.innerHTML = `<i class="material-icons" aria-hidden="true">${icon}</i><span>${escapeHtml(message)}</span>`;
     container.appendChild(div);
+    fx.toastIn(div);
 
-    setTimeout(() => {
-        if (div) {
-            div.style.animation = 'fadeOutSlide 0.3s ease-out forwards';
-            setTimeout(() => div.remove(), 300);
-        }
-    }, 3500);
+    const hold = lower.includes('emergency') ? 7000 : 3500;
+    setTimeout(() => { fx.toastOut(div).then(() => div.remove()); }, hold);
 }
 
 // --- MAP & NAVIGATION ---
@@ -213,16 +215,15 @@ window.ShowDestinationInfo = function (jsonString) {
             let details = data.subLocations?.length > 0 ? data.subLocations.map(loc => `${loc.name} - ${loc.floor || ''}`).join('\n') : `Category: ${data.category || 'N/A'}`;
             detailsEl.innerText = details.trim();
             panelEl.classList.remove('hidden');
-            panelEl.style.opacity = '1';
+            fx.panelIn(panelEl);
         }
     } catch (e) { console.error(e); }
 };
 
 window.closeInfoPanel = function () {
     const panelEl = document.getElementById('infoPanel');
-    if (panelEl) {
-        panelEl.style.opacity = '0';
-        setTimeout(() => panelEl.classList.add('hidden'), 300);
+    if (panelEl && !panelEl.classList.contains('hidden')) {
+        fx.panelOut(panelEl).then(() => panelEl.classList.add('hidden'));
     }
 }
 
@@ -241,26 +242,83 @@ function loadUnityMap(initialSearchQuery = null) {
         if (initialSearchQuery) window.handleMapSearch(initialSearchQuery);
         return;
     }
+    if (isUnityLoading) {
+        // Already fetching Unity — remember this query and run it once the
+        // instance is ready instead of re-entering the load path (which used
+        // to recurse with handleMapSearch and blow the call stack).
+        if (initialSearchQuery) pendingMapSearchQuery = initialSearchQuery;
+        return;
+    }
     if (!isKioskOnline) { alertBox("Offline: Cannot load map."); return; }
 
+    isUnityLoading = true;
     window.closeInfoPanel();
-    const mapPlaceholder = document.getElementById('mapPlaceholder');
-    mapPlaceholder.innerHTML = `<div id="unity-container" class="w-full h-full"><canvas id="unity-canvas" class="w-full h-full" style="background-color: #121212;"></canvas></div>`;
 
-    const loaderScript = document.createElement('script');
-    loaderScript.src = UNITY_LOADER_SCRIPT_PATH;
-    loaderScript.onload = () => {
-        createUnityInstance(document.querySelector("#unity-canvas"), {
-            dataUrl: UNITY_DATA_FILE, frameworkUrl: UNITY_FRAMEWORK_FILE, codeUrl: UNITY_WASM_FILE,
-            companyName: "DefaultCompany", productName: "CampusGuideKiosk", productVersion: "1.0",
-        }).then((instance) => {
-            window.unityInstance = instance;
-            isUnityLoaded = true;
-            if (initialSearchQuery) window.handleMapSearch(initialSearchQuery);
-        }).catch((m) => console.error("Unity Load Error:", m));
+    const loadingEl = document.getElementById('map-loading');
+    const loadingText = document.getElementById('map-loading-text');
+    const progressEl = document.getElementById('map-progress');
+    loadingEl.classList.remove('hidden');
+    loadingText.textContent = 'Preparing the map...';
+    progressEl.style.transform = 'scaleX(0.04)';
+
+    const failLoad = (detail) => {
+        isUnityLoading = false;
+        pendingMapSearchQuery = null;
+        console.error('Unity Load Error:', detail);
+        loadingText.textContent = 'The map could not be loaded. Close and try again.';
+        alertBox("Failed to load map.");
     };
-    document.body.appendChild(loaderScript);
-    isUnityLoaded = true;
+
+    // Only the stage is replaced; #infoPanel and #map-loading are siblings.
+    const mapStage = document.getElementById('map-stage');
+    mapStage.innerHTML = `<div id="unity-container" style="width:100%;height:100%"><canvas id="unity-canvas"></canvas></div>`;
+
+    const startLoad = () => {
+        const loaderScript = document.createElement('script');
+        loaderScript.src = UNITY_LOADER_SCRIPT_PATH;
+        loaderScript.onload = () => {
+            loadingText.textContent = 'Loading the map...';
+            createUnityInstance(document.querySelector("#unity-canvas"), {
+                dataUrl: UNITY_DATA_FILE, frameworkUrl: UNITY_FRAMEWORK_FILE, codeUrl: UNITY_WASM_FILE,
+                companyName: "DefaultCompany", productName: "CampusGuideKiosk", productVersion: "1.0",
+                // Rendering at full device resolution is the biggest GPU cost on a kiosk panel.
+                devicePixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
+            }, (progress) => {
+                progressEl.style.transform = `scaleX(${Math.max(0.04, progress)})`;
+            }).then((instance) => {
+                window.unityInstance = instance;
+                isUnityLoaded = true;
+                isUnityLoading = false;
+                progressEl.style.transform = 'scaleX(1)';
+                fx.fadeOut(loadingEl);
+                // If the user already left the map while it loaded, don't burn GPU.
+                if (document.getElementById('full-screen-map-wrapper').classList.contains('hidden')) setUnityRunning(false);
+                const queuedQuery = initialSearchQuery || pendingMapSearchQuery;
+                pendingMapSearchQuery = null;
+                if (queuedQuery) window.handleMapSearch(queuedQuery);
+            }).catch(failLoad);
+        };
+        loaderScript.onerror = () => failLoad('failed to fetch loader script');
+        document.body.appendChild(loaderScript);
+    };
+
+    // Unity's startup blocks the main thread for a second or more. Let the map
+    // open animation finish and paint a frame first so the transition stays smooth.
+    mapSettled
+        .then(() => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 80))))
+        .then(startLoad);
+}
+
+// Unity keeps rendering at full rate even when its canvas is hidden. Pause the
+// emscripten main loop whenever the map is closed so the rest of the UI stays smooth.
+function setUnityRunning(running) {
+    const mod = window.unityInstance?.Module;
+    try {
+        if (running) mod?.resumeMainLoop?.();
+        else mod?.pauseMainLoop?.();
+    } catch (e) {
+        console.warn('Could not change Unity run state:', e);
+    }
 }
 
 function navigateTo(targetId, focusQuery = '') {
@@ -276,24 +334,26 @@ function navigateTo(targetId, focusQuery = '') {
 
     if (targetId === 'map-section') {
         if (!isKioskOnline) { alertBox("Offline: Cannot load map."); return; }
+        const wasHidden = mapWrapper.classList.contains('hidden');
         mapWrapper.classList.remove('hidden');
         dashboardContainer.classList.add('hidden');
+        if (wasHidden) {
+            mapSettled = fx.mapIn(mapWrapper);
+            setUnityRunning(true);
+        }
         loadUnityMap();
         if (keyboardEl) keyboardEl.style.display = "none";
     } else {
+        if (!mapWrapper.classList.contains('hidden')) setUnityRunning(false);
         mapWrapper.classList.add('hidden');
         dashboardContainer.classList.remove('hidden');
         document.querySelectorAll('.view-section').forEach(s => {
-            if (s.parentElement === dashboardContainer) {
-                s.classList.add('hidden');
-                s.classList.remove('animate-fade-in');
-            }
+            if (s.parentElement === dashboardContainer) s.classList.add('hidden');
         });
         const target = document.getElementById(targetId);
         if (target) {
             target.classList.remove('hidden');
-            void target.offsetWidth;
-            target.classList.add('animate-fade-in');
+            fx.enterSection(target);
             if (targetId === 'events-section') { renderFilterButtons(); renderEvents(globalEvents); }
             if (targetId === 'ask-section') {
                 const qi = document.getElementById('textQueryInput');
@@ -315,12 +375,17 @@ function navigateTo(targetId, focusQuery = '') {
             btn.removeAttribute('aria-current');
         }
     });
+    const activeBtn = document.querySelector('.nav-button.active');
+    fx.moveNavIndicator(activeBtn);
+    if (activeBtn && activeBtn.getAttribute('data-target') !== previousNavTarget) fx.popNavIcon(activeBtn);
+    previousNavTarget = activeBtn?.getAttribute('data-target') ?? null;
 }
 
 window.closeMap = function () {
     const keyboardEl = document.getElementById("virtual-keyboard");
     if (keyboardEl) keyboardEl.style.display = "none";
     window.closeInfoPanel();
+    setUnityRunning(false);
     document.getElementById('full-screen-map-wrapper').classList.add('hidden');
     navigateTo(previousSectionId || 'home-section');
 }
@@ -341,6 +406,7 @@ function renderFilterButtons() {
         };
         container.appendChild(btn);
     });
+    fx.bindPhysics(container);
 }
 
 function renderEvents(events) {
@@ -349,40 +415,46 @@ function renderEvents(events) {
     container.innerHTML = '';
     let filtered = events;
     if (currentDepartmentFilter !== 'All') filtered = events.filter(e => e.department === currentDepartmentFilter);
-    const now = new Date();
-    filtered = filtered.filter(e => new Date(e.date) >= new Date(now.setHours(0, 0, 0, 0)));
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    filtered = filtered.filter(e => new Date(e.date) >= startOfToday);
 
     if (filtered.length === 0) {
-        container.innerHTML = `<div class="p-8 text-center border-2 border-dashed border-gray-700 rounded-xl" style="color: #9ca3af;"><i class="material-icons text-4xl mb-2" style="color: #6b7280;">event_note</i><p class="text-lg md:text-2xl">No events found for this filter.</p></div>`;
+        container.innerHTML = `<div class="empty-state" style="grid-column: 1 / -1;"><i class="material-icons" aria-hidden="true">event_busy</i><p>No upcoming events for this filter.</p></div>`;
+        fx.fadeIn(container.firstElementChild);
         return;
     }
 
-    filtered.forEach((event, index) => {
+    const todayStr = new Date().toDateString();
+    container.innerHTML = filtered.map((event) => {
         const eventDate = new Date(event.date);
-        const dateStr = eventDate.toDateString();
-        const isToday = new Date().toDateString() === eventDate.toDateString();
-        const todayBadge = isToday ? `<span class="text-xs px-2 py-1 rounded font-bold ml-2" style="background-color: var(--primary-neon);">TODAY</span>` : '';
-
-        container.innerHTML += `
-            <div class="p-4 md:p-6 rounded-xl shadow-lg border-l-8 transition-all hover:shadow-xl hover:translate-x-1 focus-within:ring-2 animate-fade-in"
-                 style="background-color: #2D2D2D; border-left-color: var(--purple-neon); animation-delay: ${index * 50}ms;">
-                <div class="flex items-start justify-between gap-4">
-                    <div class="flex-1 min-w-0">
-                        <h3 class="font-extrabold text-xl md:text-2xl text-white truncate">${event.title}</h3>
-                        <div class="flex items-center text-gray-300 mt-2 flex-wrap gap-2">
-                            <span class="text-sm px-2 py-1 rounded font-bold" style="background-color: #3a3a3a; color: var(--purple-neon);">${event.department}</span>
-                            <span class="text-sm md:text-lg flex items-center"><i class="material-icons" style="font-size: 1rem; margin-right: 4px;">calendar_today</i>${dateStr}</span>
-                            ${todayBadge}
-                        </div>
+        const isToday = todayStr === eventDate.toDateString();
+        const day = eventDate.getDate();
+        const mon = eventDate.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+        const weekday = eventDate.toLocaleDateString('en-US', { weekday: 'long' });
+        return `
+            <article class="event-card">
+                <div class="event-date" aria-hidden="true"><span class="day">${day}</span><span class="mon">${mon}</span></div>
+                <div class="event-body">
+                    <h3 class="event-title">${escapeHtml(event.title)}</h3>
+                    <div class="event-meta">
+                        <span class="badge">${escapeHtml(event.department)}</span>
+                        <span>${weekday}</span>
+                        ${isToday ? '<span class="badge today">TODAY</span>' : ''}
                     </div>
                 </div>
-            </div>`;
-    });
+            </article>`;
+    }).join('');
+
+    const cards = container.querySelectorAll('.event-card');
+    fx.bindPhysics(container);
+    fx.staggerIn(cards, { gap: 0.05, y: 18 });
 }
 
 // --- ASK AI ---
 function handleTextInput() {
     resetIdleTimer();
+    if (isProcessing) return; // ignore double-taps on Send while a request is in flight
     const inputField = document.getElementById('textQueryInput');
     const query = inputField.value.trim();
     if (query.length > 0) handleAsk(query);
@@ -401,26 +473,39 @@ window.handleAskClick = (query) => {
 async function handleAsk(queryText) {
     const statusEl = document.getElementById('queryStatus');
     const answerContent = document.getElementById('answerContent');
+    // Words are wrapped in spans so the answer can arrive word by word.
+    const wordSpans = (text) => String(text ?? '').split(/(\s+)/)
+        .map(w => /^\s+$/.test(w) || w === '' ? w : `<span class="w">${escapeHtml(w)}</span>`)
+        .join('');
+    const showAnswer = (html) => {
+        answerContent.innerHTML = html;
+        fx.fadeIn(answerContent.querySelector('.answer-kicker'), { y: 8, duration: 0.35 });
+        fx.revealWords(answerContent.querySelector('.answer-text'));
+        const chips = answerContent.querySelectorAll('.suggest-btn');
+        if (chips.length) {
+            fx.bindPhysics(answerContent);
+            fx.staggerIn(chips, { delay: 0.5, gap: 0.07, y: 14 });
+        }
+        answerContent.scrollTop = 0;
+    };
+
     if (!isKioskOnline) {
-        answerContent.innerHTML = `<div class="flex items-center"><i class="material-icons mr-3" style="color: #f87171;">cloud_off</i><p class="text-lg md:text-2xl" style="color: #f87171;">Offline mode - Cannot process queries.</p></div>`;
+        showAnswer(`<div class="answer-error"><i class="material-icons" aria-hidden="true">cloud_off</i><p>Offline. Cannot process questions right now.</p></div>`);
         return;
     }
 
     isProcessing = true;
     if (statusEl) {
         statusEl.innerText = "Thinking...";
-        statusEl.classList.add('animate-pulse');
-        statusEl.style.color = '#FEE700';
+        statusEl.classList.add('busy');
     }
 
     answerContent.innerHTML = `
-        <div class="animate-pulse">
-            <div class="h-4 rounded w-3/4 mb-4" style="background-color: #3a3a3a;"></div>
-            <div class="h-4 rounded w-5/6 mb-4" style="background-color: #3a3a3a;"></div>
-            <div class="h-4 rounded w-4/5 mb-4" style="background-color: #3a3a3a;"></div>
-            <div class="h-8 rounded w-1/2 mt-8" style="background-color: #3a3a3a;"></div>
-        </div>
-    `;
+        <p class="answer-kicker">Thinking</p>
+        <div class="skeleton" aria-hidden="true">
+            <i style="width: 78%"></i><i style="width: 92%"></i><i style="width: 64%"></i>
+        </div>`;
+    fx.fadeIn(answerContent.querySelector('.skeleton'), { y: 8, duration: 0.3 });
 
     try {
         const response = await fetch(API_ENDPOINT, {
@@ -432,38 +517,40 @@ async function handleAsk(queryText) {
             const isLowConfidence = matchScore < 0.7 && data.data.suggested_questions?.length > 0;
 
             if (isLowConfidence) {
-                const qList = data.data.suggested_questions.map(q =>
-                    `<button onclick="window.handleAskClick('${q.replace(/'/g, "\\'")}')"
-                        class="text-left w-full p-2 md:p-4 my-2 rounded-lg block text-lg font-semibold border-l-4 transition-all focus:outline-none"
-                        style="background-color: #3a3a3a; border-left-color: var(--secondary-neon); color: white;"
-                        onmouseover="this.style.backgroundColor='#4a4a4a'" onmouseout="this.style.backgroundColor='#3a3a3a'">${q}</button>`
+                // Build buttons with a data-index instead of inline onclick="...('${q}')" —
+                // a suggested question containing a `"` would otherwise break out of the
+                // attribute and corrupt the markup, leaving the button non-functional.
+                const suggestions = data.data.suggested_questions;
+                const qList = suggestions.map((q, i) =>
+                    `<button type="button" data-suggested-index="${i}" class="suggest-btn suggested-question-btn">${escapeHtml(q)}</button>`
                 ).join('');
-                answerContent.innerHTML = `
-                    <h4 class="text-sm font-bold mb-2 flex items-center" style="color: var(--secondary-neon);">
-                        <i class="material-icons mr-2" style="font-size: 1.2rem;">lightbulb</i>Low Confidence (${(matchScore * 100).toFixed(0)}%) - Suggested Questions:
-                    </h4>
-                    <p class="text-white text-xl md:text-3xl mb-4">${data.data.response}</p>
-                    <div class="flex flex-col gap-2">${qList}</div>`;
+                showAnswer(`
+                    <p class="answer-kicker"><i class="material-icons" aria-hidden="true">lightbulb</i>${matchScore > 0 ? `Not sure about this one (${(matchScore * 100).toFixed(0)}% match). Did you mean:` : 'No match found. Try one of these:'}</p>
+                    <p class="answer-text">${wordSpans(data.data.response)}</p>
+                    <div class="suggest-row">${qList}</div>`);
+                answerContent.querySelectorAll('.suggested-question-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const q = suggestions[Number(btn.getAttribute('data-suggested-index'))];
+                        if (q) window.handleAskClick(q);
+                    });
+                });
             } else {
-                answerContent.innerHTML = `
-                    <h4 class="text-sm font-bold mb-2 flex items-center" style="color: var(--purple-neon);">
-                        <i class="material-icons mr-2" style="font-size: 1.2rem;">check_circle</i>Answer
-                    </h4>
-                    <p class="text-white text-xl md:text-3xl leading-relaxed">${data.data.response}</p>`;
+                showAnswer(`
+                    <p class="answer-kicker ok"><i class="material-icons" aria-hidden="true">check_circle</i>Answer</p>
+                    <p class="answer-text">${wordSpans(data.data.response)}</p>`);
             }
         } else {
-            answerContent.innerHTML = `<div class="flex items-center" style="color: #f87171;"><i class="material-icons mr-3" style="font-size: 1.5rem;">error</i><p class="text-lg md:text-2xl">Error: ${data.message || 'Unknown error'}</p></div>`;
+            showAnswer(`<div class="answer-error"><i class="material-icons" aria-hidden="true">error</i><p>Error: ${escapeHtml(data.message || 'Unknown error')}</p></div>`);
         }
     } catch (e) {
         console.error(e);
-        answerContent.innerHTML = `<div class="flex items-center" style="color: #f87171;"><i class="material-icons mr-3" style="font-size: 1.5rem;">wifi_off</i><p class="text-lg md:text-2xl">Connection Error. Please try again.</p></div>`;
+        showAnswer(`<div class="answer-error"><i class="material-icons" aria-hidden="true">wifi_off</i><p>Connection error. Please try again.</p></div>`);
     }
     finally {
         isProcessing = false;
         if (statusEl) {
-            statusEl.classList.remove('animate-pulse');
+            statusEl.classList.remove('busy');
             statusEl.innerText = "Ready";
-            statusEl.style.color = 'var(--purple-neon)';
         }
     }
 }
@@ -576,20 +663,52 @@ window.handleMapSearch = (q) => {
 };
 
 // --- INIT ---
-document.addEventListener('DOMContentLoaded', () => {
+// fx.js uses top-level await, so this module can finish evaluating AFTER
+// DOMContentLoaded has already fired. Run init immediately in that case.
+function init() {
     checkNetworkStatus();
     setInterval(checkNetworkStatus, 30000);
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    const q = query(collection(db, EVENTS_COLLECTION_PATH), orderBy("date"));
-    onSnapshot(q, (snapshot) => {
-        globalEvents = [];
-        snapshot.forEach((doc) => { globalEvents.push({ id: doc.id, ...doc.data() }); });
-        if (!document.getElementById('events-section').classList.contains('hidden')) renderEvents(globalEvents);
-    });
+    // Don't open a doomed Firestore listener when the project isn't configured
+    // (it just spams 400s). Events then show their normal empty state.
+    const pid = window.env.FIREBASE_PROJECT_ID;
+    if (!pid || pid.startsWith('your_') || !window.env.FIREBASE_API_KEY || window.env.FIREBASE_API_KEY.startsWith('your_')) {
+        console.warn('Firebase is not configured in .env (FIREBASE_API_KEY / FIREBASE_PROJECT_ID / FIREBASE_APP_ID). Events are disabled.');
+    } else {
+        const q = query(collection(db, EVENTS_COLLECTION_PATH), orderBy("date"));
+        onSnapshot(q, (snapshot) => {
+            globalEvents = [];
+            snapshot.forEach((doc) => { globalEvents.push({ id: doc.id, ...doc.data() }); });
+            if (!document.getElementById('events-section').classList.contains('hidden')) renderEvents(globalEvents);
+        }, (err) => {
+            console.error('Events listener error:', err.code || err.message);
+        });
+    }
 
     if (window.SimpleKeyboard) setupKeyboard();
+
+    // Motion: press/hover physics, nav indicator, idle ambience, first entrance
+    fx.bindPhysics();
+    const placeIndicator = (instant) => fx.moveNavIndicator(document.querySelector('.nav-button.active'), { instant });
+    placeIndicator(true);
+    document.fonts?.ready.then(() => placeIndicator(true));
+    window.addEventListener('resize', () => placeIndicator(true));
+    fx.bindSpotlight();
+    fx.idleIntro();
+    fx.startIdleAmbient();
+    fx.rotateText(
+        document.getElementById('ask-rotator'),
+        ['Ask the Campus Guide', 'Where is the Clinic?', 'What are the library hours?', 'How do I enroll?'],
+        { every: 4200 },
+    );
+    fx.enterSection(document.getElementById('home-section'));
+
+    // Empty-state suggestion chips in Ask AI
+    document.querySelectorAll('.suggest-btn[data-ask]').forEach(btn => {
+        btn.addEventListener('click', () => window.handleAskClick(btn.getAttribute('data-ask')));
+    });
 
     document.getElementById('idle-overlay').addEventListener('click', resetIdleTimer);
     document.addEventListener('click', resetIdleTimer);
@@ -610,10 +729,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.querySelectorAll('.quick-link-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
+        btn.addEventListener('click', () => {
             const t = btn.getAttribute('data-target');
             if (t === 'emergency') {
-                alertBox("🚨 Emergency: Call 911 immediately");
+                alertBox("Emergency: call 911 immediately");
                 return;
             }
             navigateTo(t, btn.getAttribute('data-query'));
@@ -637,4 +756,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
-});
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+else init();

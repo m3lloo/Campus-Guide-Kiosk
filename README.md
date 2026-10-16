@@ -16,34 +16,38 @@ A Flask-based interactive kiosk application that provides campus information and
 
 ```
 .
-├── app.py                  # Main Flask application
-├── config.py               # Configuration management
-├── error_handlers.py       # Error handling & validation
+├── app.py                  # Flask app: routes, search, Gemini calls
+├── config.py               # Configuration from environment variables
+├── error_handlers.py       # Input validation, error and auth helpers
 ├── logging_config.py       # Logging setup
-├── index.py                # Admin tool for managing FAQ data
-├── requirements.txt        # Python dependencies
-├── pytest.ini              # Test configuration
-├── .env                    # Environment variables (create from .env.example)
-├── firebase/
-│   └── campus_guide_kiosk.json  # Firebase credentials
-├── static/
-│   ├── script.js           # Frontend JavaScript
-│   ├── style.css           # Frontend styling
-│   └── unity/              # Unity WebGL build files
+├── tools/
+│   └── admin_tool.py       # CLI for managing FAQs and events in Firestore
 ├── templates/
-│   └── index.html          # Main HTML template
-├── tests/                  # Automated test suite
-├── data/                   # Data storage directory
-├── logs/                   # Application logs
-├── Dockerfile              # Docker container setup
-├── docker-compose.yml      # Docker composition for deployment
-└── venv/                   # Virtual environment (ignored in git)
+│   └── index.html          # The single-page kiosk UI
+├── static/
+│   ├── style.css           # Design system and layout
+│   ├── script.js           # App logic (navigation, events, Ask AI, map)
+│   ├── fx.js               # Motion layer (motion.dev animations)
+│   ├── vendor/             # Self-hosted libraries (see its README)
+│   └── unity/              # Unity WebGL campus map build
+├── tests/                  # Automated test suite (pytest)
+├── docs/
+│   ├── API.md              # API reference
+│   └── DEPLOYMENT.md       # Deployment guide
+├── firebase/               # Put your service-account key here (git-ignored)
+├── requirements.txt        # Runtime dependencies
+├── requirements-dev.txt    # Test and lint tools
+├── pytest.ini              # Test configuration
+├── Dockerfile              # Production image
+├── docker-compose.yml      # Docker deployment
+├── .env.example            # Environment template (copy to .env)
+└── .github/workflows/      # CI/CD pipeline
 ```
 
 ## Setup & Installation
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.11+
 - pip or conda
 - Git
 
@@ -79,7 +83,7 @@ cp .env.example .env
 - `FIREBASE_API_KEY`: Firebase project API key
 - `FIREBASE_PROJECT_ID`: Firebase project ID
 - `FIREBASE_APP_ID`: Firebase app ID
-- `API_KEY_1`: Google Gemini API key (add more as API_KEY_2, API_KEY_3, etc.)
+- `GEMINI_API_KEYS`: Google Gemini API key(s), comma-separated for automatic rotation (`key1,key2`)
 - `firebase/campus_guide_kiosk.json`: Firebase service account credentials file
 
 ### 5. Run the Application
@@ -151,10 +155,10 @@ Reload FAQ data from Firebase (admin-only endpoint, protected by secret).
 
 ## Managing FAQ Data
 
-Use `index.py` to manage campus information:
+Use `tools/admin_tool.py` to manage campus information:
 
 ```bash
-python index.py
+python tools/admin_tool.py
 ```
 
 This tool allows you to:
@@ -185,7 +189,7 @@ python app.py
 
 ### Using Gunicorn (Production)
 ```bash
-gunicorn --workers 4 --bind 0.0.0.0:5000 --timeout 120 app:app
+gunicorn --workers 2 --bind 0.0.0.0:5000 --timeout 120 app:app
 ```
 
 ### Using Docker (Recommended)
@@ -193,7 +197,7 @@ The project includes a multi-stage Dockerfile optimized for production:
 
 ```bash
 # Build and run with Docker Compose
-docker-compose up -d
+docker compose up -d
 
 # Or build manually
 docker build -t campus-guide-kiosk .
@@ -207,7 +211,7 @@ Docker Compose handles:
 - Health checks
 - Automatic restart policy
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions.
+See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for detailed deployment instructions.
 
 ## Troubleshooting
 
@@ -220,7 +224,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions.
 - Check Firebase credentials in `.env`
 
 ### Issue: "API key exhausted"
-- Add more Gemini API keys as `API_KEY_2`, `API_KEY_3`, etc. in `.env`
+- Add more keys to `GEMINI_API_KEYS` in `.env`, separated by commas
 - Keys are rotated automatically on quota limits
 
 ## Architecture Notes
@@ -232,7 +236,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions.
 
 ## Dependencies
 
-See [requirements.txt](requirements.txt) for full list. Key packages:
+See [requirements.txt](requirements.txt) (runtime) and [requirements-dev.txt](requirements-dev.txt) (tests and lint). Key packages:
 - **Flask** - Web framework
 - **google-genai** - Gemini API (Google's latest Generative AI library)
 - **firebase-admin** - Firebase integration
@@ -247,15 +251,16 @@ See [requirements.txt](requirements.txt) for full list. Key packages:
 ## Documentation
 
 For more detailed information, see:
-- [API Documentation](API.md) - Complete API reference
+- [API Documentation](docs/API.md) - Complete API reference
 - [Security Guidelines](SECURITY.md) - Security best practices and configurations
-- [Deployment Guide](DEPLOYMENT.md) - Detailed deployment instructions
+- [Deployment Guide](docs/DEPLOYMENT.md) - Detailed deployment instructions
 - [Contributing Guidelines](CONTRIBUTING.md) - How to contribute to this project
 
 ## Testing
 
 Run the automated test suite:
 ```bash
+pip install -r requirements-dev.txt
 pytest
 ```
 

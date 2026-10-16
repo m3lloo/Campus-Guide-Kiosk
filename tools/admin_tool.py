@@ -1,7 +1,12 @@
 """
-Campus Guide Kiosk — Admin Data Manager (Refactored)
-=====================================================
-Key improvements over original:
+Campus Guide Kiosk — Admin Data Manager
+=======================================
+Interactive CLI for managing FAQs (with embeddings) and events in Firestore.
+
+Run from anywhere:   python tools/admin_tool.py
+Uses the same .env, Firebase key and GEMINI_API_KEYS as the web app.
+
+Design notes:
   - Writes to 'faqs' collection — same collection app.py reads from
   - build_embedding_context() is imported-equivalent to app.py's version
     so the vector space at write-time == query-time (no more mismatch)
@@ -19,11 +24,11 @@ import re
 import json
 import time
 import nltk
-import numpy as np
 import firebase_admin
 from firebase_admin import credentials, firestore
 from sentence_transformers import SentenceTransformer
 from datetime import datetime
+from pathlib import Path
 from dotenv import load_dotenv
 import google.genai as genai
 from google.api_core.exceptions import ResourceExhausted
@@ -35,16 +40,20 @@ try:
 except ImportError:
     _REQUESTS_AVAILABLE = False
 
-load_dotenv()
+# Paths are resolved from the project root, so the tool works from any cwd.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-SERVICE_ACCOUNT_KEY_PATH = "firebase/campus_guide_kiosk.json"
-FAQ_COLLECTION_NAME = "faqs"  # must match app.py
-EVENTS_COLLECTION_NAME = "events"
+SERVICE_ACCOUNT_KEY_PATH = str(
+    PROJECT_ROOT / os.getenv("FIREBASE_KEY_PATH", "firebase/campus_guide_kiosk.json")
+)
+FAQ_COLLECTION_NAME = os.getenv("FAQ_COLLECTION", "faqs")  # must match app.py
+EVENTS_COLLECTION_NAME = os.getenv("EVENTS_COLLECTION", "events")
 
-USAGE_FILE = ".api_usage.json"  # persists counter across runs
+USAGE_FILE = str(PROJECT_ROOT / ".api_usage.json")  # persists counter across runs
 DAILY_FREE_LIMIT = 200
 
 # Optional: set APP_RELOAD_URL in .env to auto-refresh app.py after changes
@@ -112,14 +121,15 @@ except Exception as e:
 # ---------------------------------------------------------------------------
 # Gemini — key rotation (mirrors app.py)
 # ---------------------------------------------------------------------------
-_RAW_KEYS = [os.environ.get(f"API_KEY_{i}") for i in range(1, 6)]
-API_KEYS = [k for k in _RAW_KEYS if k]
+# Same variable the web app uses (comma-separated), so one .env serves both.
+API_KEYS = [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
 
 if not API_KEYS:
-    # Fallback: try the legacy single-key name used in the original script
-    legacy = os.environ.get("API_Key") or os.environ.get("API_KEY")
-    if legacy:
-        API_KEYS = [legacy]
+    # Legacy fallbacks used by the original script
+    _legacy = [os.environ.get(f"API_KEY_{i}") for i in range(1, 6)]
+    API_KEYS = [k for k in _legacy if k] or [
+        k for k in (os.environ.get("API_Key") or os.environ.get("API_KEY"),) if k
+    ]
 
 _current_key_index = 0
 gemini_model_instance = None
@@ -127,7 +137,7 @@ gemini_model_instance = None
 
 def _get_gemini_model():
     """Returns a configured client for Gemini API."""
-    global _current_key_index, gemini_model_instance
+    global gemini_model_instance
     if not API_KEYS:
         return None
     gemini_model_instance = genai.Client(api_key=API_KEYS[_current_key_index])
@@ -149,10 +159,13 @@ def _call_gemini(prompt: str) -> str | None:
             _current_key_index = key_index
             _increment_usage()
             return resp.text.strip()
-        except ResourceExhausted:
-            print(f"⚠️  API key [{key_index}] exhausted, rotating...")
-            time.sleep(0.5 * (attempt + 1))
         except Exception as e:
+            # google-genai raises its own error types; detect quota via HTTP 429.
+            code = getattr(e, "code", None) or getattr(e, "status_code", None)
+            if isinstance(e, ResourceExhausted) or code == 429 or "RESOURCE_EXHAUSTED" in str(e):
+                print(f"⚠️  API key [{key_index}] exhausted, rotating...")
+                time.sleep(0.5 * (attempt + 1))
+                continue
             print(f"⚠️  Gemini error: {e}")
             return None
     print("❌ All API keys exhausted.")
@@ -874,9 +887,3 @@ def main_menu():
 
 if __name__ == "__main__":
     main_menu()
-
-# ---------------------------------------------------------------------------
-# Install dependencies:
-#   pip install firebase-admin nltk numpy sentence-transformers \
-#               google-generativeai python-dotenv requests
-# ---------------------------------------------------------------------------

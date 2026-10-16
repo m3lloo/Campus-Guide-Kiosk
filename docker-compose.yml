@@ -1,38 +1,19 @@
-version: '3.8'
-
 services:
   web:
     build: .
     container_name: campus_guide_kiosk
     ports:
       - "5000:5000"
-    environment:
-      - FLASK_ENV=production
-      - ENVIRONMENT=production
-      - LOG_LEVEL=INFO
-      - RATE_LIMIT_ENABLED=True
-      - FLASK_HOST=0.0.0.0
-      - FLASK_PORT=5000
-      # Add your environment variables here or use a .env file:
-      # - GEMINI_API_KEYS=your_key_here
-      # - FIREBASE_PROJECT_ID=your_project_id
-      # - FIREBASE_API_KEY=your_api_key
-    volumes:
-      - ./firebase:/app/firebase:ro
-      - ./logs:/app/logs
-      - ./data:/app/data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/api/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+    # Secrets (GEMINI_API_KEYS, FIREBASE_*, RELOAD_SECRET, ...) come from .env.
     env_file:
       - .env
-    networks:
-      - campus_guide_network
-
-networks:
-  campus_guide_network:
-    driver: bridge
+    environment:
+      - ENVIRONMENT=production
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5000
+    volumes:
+      # Firebase service-account key, never baked into the image
+      - ./firebase:/app/firebase:ro
+      - ./logs:/app/logs
+    restart: unless-stopped
+    # The image has no curl; the Dockerfile HEALTHCHECK (python/urllib) is used.

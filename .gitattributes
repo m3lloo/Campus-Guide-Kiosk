@@ -1,0 +1,9 @@
+# Normalise line endings in the repo (LF); checkouts convert as needed.
+* text=auto eol=lf
+
+# Unity WebGL build output is binary, never diff or convert it
+*.unityweb binary
+static/unity/*.js -diff linguist-generated
+
+# Vendored third-party bundles
+static/vendor/* linguist-vendored

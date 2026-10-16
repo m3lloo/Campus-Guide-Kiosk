@@ -9,69 +9,64 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    
+
     strategy:
       matrix:
-        python-version: ['3.9', '3.10', '3.11']
-    
+        python-version: ['3.11', '3.12']
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    
+
     - name: Cache pip packages
       uses: actions/cache@v4
       with:
         path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirements*.txt') }}
         restore-keys: |
-          ${{ runner.os }}-pip-
-    
+          ${{ runner.os }}-pip-${{ matrix.python-version }}-
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-    
-    - name: Lint with pylint
+        pip install -r requirements-dev.txt
+
+    - name: Lint (undefined names, unused imports and variables)
+      run: flake8 app.py config.py error_handlers.py logging_config.py tools tests --select=F --show-source
+
+    - name: Check formatting (advisory)
       continue-on-error: true
-      run: |
-        pip install pylint
-        pylint app.py config.py error_handlers.py logging_config.py --disable=C0114,C0115,C0116 || true
-    
-    - name: Format code with black
-      continue-on-error: true
-      run: |
-        pip install black
-        black . || true
-    
+      run: black --check app.py config.py error_handlers.py logging_config.py tools tests
+
     - name: Run tests with pytest
-      run: |
-        pytest tests/ -v --cov=. --cov-report=xml
-    
+      run: pytest tests/ --cov=. --cov-report=xml
+
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:
         files: ./coverage.xml
         flags: unittests
         name: codecov-umbrella
+        fail_ci_if_error: false
 
   security:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
-    
-    - name: Run Bandit security check
+
+    - name: Run Bandit security check (advisory)
       continue-on-error: true
       run: |
         pip install bandit
-        bandit -r . -ll || true
-    
+        bandit -r app.py config.py error_handlers.py logging_config.py tools -ll
+
     - name: Check for secrets
       uses: trufflesecurity/trufflehog@main
       with:
@@ -84,15 +79,15 @@ jobs:
     permissions:
       contents: read
       security-events: write
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-    
+      uses: docker/setup-buildx-action@v3
+
     - name: Build Docker image
-      uses: docker/build-push-action@v4
+      uses: docker/build-push-action@v6
       with:
         context: .
         push: false
@@ -100,7 +95,7 @@ jobs:
         tags: campus-guide-kiosk:${{ github.sha }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
-    
+
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master
       with:
@@ -108,20 +103,19 @@ jobs:
         scan-ref: '.'
         format: 'sarif'
         output: 'trivy-results.sarif'
-    
+
     - name: Upload Trivy results to GitHub Security tab
       uses: github/codeql-action/upload-sarif@v4
       with:
         sarif_file: 'trivy-results.sarif'
 
+  # Deploy jobs are skipped automatically until the matching secrets exist.
   deploy-staging:
     needs: build
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/develop'
-    
+
     steps:
-    - uses: actions/checkout@v4
-    
     - name: Deploy to staging
       env:
         DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
@@ -129,21 +123,19 @@ jobs:
         DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
       run: |
         if [ -z "$DEPLOY_HOST" ]; then
-          echo "Warning: DEPLOY_HOST secret not configured. Skipping deployment."
+          echo "DEPLOY_HOST secret not configured. Skipping deployment."
           exit 0
         fi
         mkdir -p ~/.ssh
         echo "$DEPLOY_KEY" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan -t rsa $DEPLOY_HOST >> ~/.ssh/known_hosts 2>/dev/null || true
-        
-        ssh $DEPLOY_USER@$DEPLOY_HOST << 'EOF'
+        ssh-keyscan -t rsa "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+        ssh "$DEPLOY_USER@$DEPLOY_HOST" << 'EOF'
+          set -e
           cd /app/campus-guide-kiosk
           git pull origin develop
-          docker-compose -f docker-compose.yml down
-          docker-compose -f docker-compose.yml pull
-          docker-compose -f docker-compose.yml up -d
-          docker-compose exec -T web python -m pytest tests/
+          docker compose up -d --build
         EOF
 
   deploy-production:
@@ -152,10 +144,12 @@ jobs:
     if: github.ref == 'refs/heads/main'
     permissions:
       contents: write
-    
+    env:
+      DEPLOY_CONFIGURED: ${{ secrets.PROD_DEPLOY_HOST != '' }}
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Deploy to production
       env:
         DEPLOY_KEY: ${{ secrets.PROD_DEPLOY_KEY }}
@@ -163,31 +157,32 @@ jobs:
         DEPLOY_USER: ${{ secrets.PROD_DEPLOY_USER }}
       run: |
         if [ -z "$DEPLOY_HOST" ]; then
-          echo "Warning: PROD_DEPLOY_HOST secret not configured. Skipping deployment."
+          echo "PROD_DEPLOY_HOST secret not configured. Skipping deployment."
           exit 0
         fi
         mkdir -p ~/.ssh
         echo "$DEPLOY_KEY" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan -t rsa $DEPLOY_HOST >> ~/.ssh/known_hosts 2>/dev/null || true
-        
-        ssh $DEPLOY_USER@$DEPLOY_HOST << 'EOF'
+        ssh-keyscan -t rsa "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+        ssh "$DEPLOY_USER@$DEPLOY_HOST" << 'EOF'
+          set -e
           cd /app/campus-guide-kiosk
           git pull origin main
-          docker-compose -f docker-compose.yml down
-          docker-compose -f docker-compose.yml pull
-          docker-compose -f docker-compose.yml up -d
-          docker-compose exec -T web python -m pytest tests/
-          curl -f http://localhost:5000/api/v1/health || exit 1
+          docker compose up -d --build
+          # The model takes a while to load; allow up to ~2 minutes.
+          for i in $(seq 1 24); do
+            curl -fsS http://localhost:5000/api/v1/health && exit 0
+            sleep 5
+          done
+          echo "Health check failed after deploy" >&2
+          exit 1
         EOF
-    
+
     - name: Create GitHub Release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      if: env.DEPLOY_CONFIGURED == 'true'
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: v${{ github.run_number }}
-        release_name: Release ${{ github.run_number }}
+        name: Release ${{ github.run_number }}
         body: Automated production release
-        draft: false
-        prerelease: false

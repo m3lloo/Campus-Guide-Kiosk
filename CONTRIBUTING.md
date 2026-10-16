@@ -41,7 +41,7 @@ We are committed to providing a welcoming and inspiring community for all. Pleas
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.11+
 - Git
 - Docker (optional, for containerized development)
 
@@ -57,7 +57,7 @@ python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
 # Setup environment
 cp .env.example .env
@@ -76,16 +76,16 @@ python app.py
 
 ```bash
 # Build development image
-docker-compose build
+docker compose build
 
 # Start services
-docker-compose up
+docker compose up
 
 # Access application
 # http://localhost:5000
 
 # View logs
-docker-compose logs -f web
+docker compose logs -f web
 ```
 
 ---
@@ -109,14 +109,14 @@ CampusGuideKiosk/
 ├── config.py                   # Configuration management
 ├── error_handlers.py           # Error handling utilities
 ├── logging_config.py           # Logging setup
-├── index.py                    # Admin data manager
+├── tools/
+│   └── admin_tool.py           # Admin data manager (CLI)
 ├── tests/                      # Test suite
 │   ├── __init__.py
 │   ├── conftest.py
 │   ├── test_error_handlers.py
 │   ├── test_routes.py
 │   └── test_*.py
-├── routes/                     # API route modules (optional)
 ├── firebase/                   # Firebase configuration
 ├── templates/                  # HTML templates
 ├── static/                     # Frontend assets
@@ -408,7 +408,7 @@ test(validation): add comprehensive input tests
 - Update relevant `.md` files
 - Add docstrings to code
 - Include examples where applicable
-- Update API.md for new endpoints
+- Update docs/API.md for new endpoints
 
 ### Documentation Format
 

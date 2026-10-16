@@ -20,7 +20,7 @@ This guide covers various deployment methods for Campus Guide Kiosk, from local 
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.11+
 - pip or conda
 - Git
 
@@ -61,13 +61,13 @@ Visit http://localhost:5000
 
 ```bash
 # Build and run with docker-compose
-docker-compose up -d
+docker compose up -d
 
 # Check logs
-docker-compose logs -f web
+docker compose logs -f web
 
 # Stop
-docker-compose down
+docker compose down
 ```
 
 ### Docker Build
@@ -130,7 +130,7 @@ cp .env.example .env
 # Edit with production values
 
 # Deploy with Docker
-sudo docker-compose up -d
+sudo docker compose up -d
 ```
 
 ### Google Cloud Run Deployment
@@ -292,10 +292,10 @@ Expected response:
 
 ```bash
 # Real-time logs
-docker-compose logs -f web
+docker compose logs -f web
 
 # Last 100 lines
-docker-compose logs --tail 100 web
+docker compose logs --tail 100 web
 ```
 
 #### Application Logs
@@ -394,8 +394,8 @@ pip install --upgrade -r requirements.txt
 pytest
 
 # Rebuild Docker image
-docker-compose build --no-cache
-docker-compose up -d
+docker compose build --no-cache
+docker compose up -d
 ```
 
 #### Database Optimization

@@ -16,14 +16,16 @@ Key improvements over original:
 import warnings
 import os
 import time
-import traceback
 import numpy as np
 from functools import lru_cache
 from flask import Flask, jsonify, request, render_template
 import google.genai as genai
+from google.genai import errors as genai_errors
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 import firebase_admin
 from firebase_admin import credentials, firestore
 import nltk
@@ -37,10 +39,9 @@ from logging_config import logger, log_api_call, log_error
 from error_handlers import (
     APIError,
     ValidationError,
-    InternalServerError as InternalServerErrorCustom,
-    sanitize_input,
     validate_api_request,
     validate_query,
+    check_admin_secret,
     create_success_response,
     create_error_response,
 )
@@ -52,6 +53,26 @@ os.environ["MKL_NUM_THREADS"] = "1"
 warnings.filterwarnings("ignore")
 
 app = Flask(__name__)
+
+# Trust X-Forwarded-* headers from N reverse proxy hops (e.g. nginx) so that
+# rate limiting and request logging see the real client IP instead of the
+# proxy's. Disabled (0) by default — only enable via TRUSTED_PROXY_COUNT when
+# the app truly sits behind that many trusted proxies, otherwise these
+# headers are client-controlled and would let rate limiting be spoofed.
+if config.app.trusted_proxy_count > 0:
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=config.app.trusted_proxy_count,
+        x_proto=config.app.trusted_proxy_count,
+        x_host=config.app.trusted_proxy_count,
+    )
+
+# CORS — restrict to configured origins (CORS_ORIGINS env var, default "*")
+CORS(
+    app,
+    resources={r"/api/*": {"origins": config.security.cors_origins}},
+    supports_credentials=False,
+)
 
 # Rate limiting setup
 limiter = Limiter(
@@ -67,6 +88,13 @@ limiter = Limiter(
 
 logger.info(
     f"[START] Campus Guide Kiosk starting in {config.environment} mode")
+
+RELOAD_SECRET_CONFIGURED = bool(os.getenv("RELOAD_SECRET", ""))
+if not RELOAD_SECRET_CONFIGURED:
+    logger.warning(
+        "RELOAD_SECRET is not set — /api/v1/reload and /api/v1/analytics "
+        "are UNAUTHENTICATED. Set RELOAD_SECRET before deploying to production."
+    )
 
 # ---------------------------------------------------------------------------
 # NLTK Setup
@@ -234,24 +262,51 @@ SYSTEM_INSTRUCTION = (
 )
 
 _current_key_index = 0
+_GEMINI_CLIENTS = {}  # key_index -> genai.Client, built lazily and reused
+
+
+def _get_gemini_client(key_index: int):
+    """Returns a cached genai.Client for the given key index, creating it on first use."""
+    client = _GEMINI_CLIENTS.get(key_index)
+    if client is None:
+        client = genai.Client(api_key=API_KEYS[key_index])
+        _GEMINI_CLIENTS[key_index] = client
+    return client
+
+
+GEMINI_TROUBLE_MSG = "I'm having trouble connecting right now. Please try again."
+GEMINI_BUSY_MSG = "All AI service slots are currently busy. Please try again shortly."
+GEMINI_OFFLINE_MSG = "AI service is currently offline."
+
+
+class GeminiUnavailable(Exception):
+    """Gemini call failed; str(e) is a user-safe message. Never cached."""
+
+
+def _is_quota_error(e: Exception) -> bool:
+    if isinstance(e, ResourceExhausted):
+        return True
+    code = getattr(e, "code", None) or getattr(e, "status_code", None)
+    return code == 429 or "RESOURCE_EXHAUSTED" in str(e)
 
 
 def get_gemini_response(prompt: str) -> str:
     """
-    Calls Gemini with automatic key rotation on ResourceExhausted.
+    Calls Gemini with automatic key rotation on quota (429) errors.
     Tries each key once with a short backoff before giving up.
+    Raises GeminiUnavailable on failure so callers don't cache error text.
     """
     global _current_key_index
 
     if not API_KEYS:
         logger.warning("Gemini: No API keys available")
-        return "AI service is currently offline."
+        raise GeminiUnavailable(GEMINI_OFFLINE_MSG)
 
     attempts = len(API_KEYS)
     for attempt in range(attempts):
         key_index = (_current_key_index + attempt) % len(API_KEYS)
         try:
-            client = genai.Client(api_key=API_KEYS[key_index])
+            client = _get_gemini_client(key_index)
             response = client.models.generate_content(
                 model=config.gemini.model,
                 contents=prompt,
@@ -264,23 +319,23 @@ def get_gemini_response(prompt: str) -> str:
                 f"Gemini response generated successfully with key {key_index}")
             return response.text.strip()
 
-        except ResourceExhausted:
-            logger.warning(f"API key [{key_index}] exhausted, rotating...")
-            time.sleep(0.5 * (attempt + 1))  # 0.5s, 1.0s, 1.5s ...
-            continue
-
-        except InternalServerError as e:
-            logger.warning(f"Gemini InternalServerError: {e}")
-            return "I'm having trouble connecting right now. Please try again."
-
         except Exception as e:
+            # google-genai raises its own errors (not google.api_core ones),
+            # so detect quota exhaustion via the HTTP status / status text.
+            if _is_quota_error(e):
+                logger.warning(f"API key [{key_index}] exhausted, rotating...")
+                time.sleep(0.5 * (attempt + 1))  # 0.5s, 1.0s, 1.5s ...
+                continue
+            if isinstance(e, (InternalServerError, genai_errors.ServerError)):
+                logger.warning(f"Gemini server error: {e}")
+                raise GeminiUnavailable(GEMINI_TROUBLE_MSG) from e
             log_error("GeminiError", f"Gemini error: {e}")
-            return "I apologize, I am having trouble connecting to the AI right now."
+            raise GeminiUnavailable(GEMINI_TROUBLE_MSG) from e
 
     # All keys exhausted
     logger.error("All Gemini API keys exhausted")
     _current_key_index = (_current_key_index + 1) % len(API_KEYS)
-    return "All AI service slots are currently busy. Please try again shortly."
+    raise GeminiUnavailable(GEMINI_BUSY_MSG)
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +462,8 @@ def cached_search_and_respond(user_query: str):
         f"Database Fact: {best['answer']}\n"
         f"Answer the user politely and concisely."
     )
+    # May raise GeminiUnavailable — lru_cache doesn't cache exceptions, so a
+    # transient outage is never served from cache after Gemini recovers.
     response_text = get_gemini_response(prompt)
 
     # Suggested follow-up questions come from the matched FAQ's own
@@ -463,6 +520,15 @@ def handle_internal_error(error):
     return jsonify(response), status_code
 
 
+@app.errorhandler(429)
+def handle_rate_limit_exceeded(error):
+    """Handle rate limit errors (raised by Flask-Limiter)."""
+    response, status_code = create_error_response(
+        "RateLimitExceeded", "Rate limit exceeded. Please try again later.", 429
+    )
+    return jsonify(response), status_code
+
+
 @app.route("/")
 def index():
     """Serve the main HTML template."""
@@ -514,9 +580,19 @@ def handle_ask_query():
                 logger.warning(f"Failed to log query to analytics: {e}")
 
         # Get response
-        response_text, suggested_questions, match_score = cached_search_and_respond(
-            user_query
-        )
+        try:
+            response_text, suggested_questions, match_score = cached_search_and_respond(
+                user_query
+            )
+        except GeminiUnavailable as e:
+            # AI down: degrade to the best stored FAQ answer (uncached).
+            matches = search_faqs(user_query)
+            if not matches or matches[0]["score"] < ANSWER_MIN_SCORE:
+                response_text, suggested_questions, match_score = str(e), [], 0.0
+            else:
+                response_text = matches[0]["answer"]
+                suggested_questions = matches[0]["generated_questions"][:4]
+                match_score = matches[0]["score"]
 
         duration_ms = (time.time() - start_time) * 1000
         log_api_call("/api/v1/ask", "POST", 200, duration_ms, user_query)
@@ -556,6 +632,23 @@ def handle_ask_query():
         return jsonify(response), status_code
 
 
+def _check_admin_authorized(secret: str, log_message: str):
+    """
+    Shared admin-secret gate for /api/v1/reload and /api/v1/analytics.
+    Returns None if the request is authorized, or an (response, status_code)
+    tuple the caller should return immediately otherwise.
+    """
+    expected = os.getenv("RELOAD_SECRET", "")
+    if not expected and config.environment == "production":
+        # Fail closed: never expose admin endpoints in production without a secret.
+        log_error("Unauthorized", f"{log_message} (RELOAD_SECRET unset in production)")
+        return create_error_response("Unauthorized", "Invalid credentials", 401)
+    if check_admin_secret(secret, expected):
+        return None
+    log_error("Unauthorized", f"{log_message} from {request.remote_addr}")
+    return create_error_response("Unauthorized", "Invalid credentials", 401)
+
+
 @app.route("/api/v1/reload", methods=["POST"])
 def reload_faq_store():
     """
@@ -565,15 +658,11 @@ def reload_faq_store():
     """
     try:
         secret = request.headers.get("X-Reload-Secret", "")
-        expected = os.getenv("RELOAD_SECRET", "")
-        if expected and secret != expected:
-            log_error(
-                "Unauthorized",
-                f"Reload attempted with invalid secret from {request.remote_addr}",
-            )
-            response, status_code = create_error_response(
-                "Unauthorized", "Invalid credentials", 401
-            )
+        auth_error = _check_admin_authorized(
+            secret, "Reload attempted with invalid secret"
+        )
+        if auth_error:
+            response, status_code = auth_error
             return jsonify(response), status_code
 
         logger.info("📤 Reloading FAQ store...")
@@ -587,7 +676,7 @@ def reload_faq_store():
                 create_success_response(
                     {
                         "faq_count": len(FAQ_STORE),
-                        "embedding_matrix_shape": EMBEDDING_MATRIX.shape
+                        "embedding_matrix_shape": list(EMBEDDING_MATRIX.shape)
                         if EMBEDDING_MATRIX is not None
                         else None,
                     },
@@ -610,8 +699,6 @@ def health_check():
     """Comprehensive health check endpoint."""
     try:
         firebase_status = "connected" if db is not None else "disconnected"
-        embeddings_status = "loaded" if EMBEDDING_MODEL is not None else "not_loaded"
-
         health_data = {
             "status": "healthy",
             "environment": config.environment,
@@ -655,18 +742,22 @@ def get_analytics():
     try:
         # Check admin authentication
         secret = request.args.get("secret", "")
-        expected = os.getenv("RELOAD_SECRET", "")
-        if expected and secret != expected:
-            log_error(
-                "Unauthorized",
-                f"Analytics requested without valid secret from {request.remote_addr}",
-            )
-            response, status_code = create_error_response(
-                "Unauthorized", "Invalid credentials", 401
-            )
+        auth_error = _check_admin_authorized(
+            secret, "Analytics requested without valid secret"
+        )
+        if auth_error:
+            response, status_code = auth_error
             return jsonify(response), status_code
 
-        limit = min(int(request.args.get("limit", 100)), 1000)
+        try:
+            limit = min(int(request.args.get("limit", 100)), 1000)
+            if limit < 1:
+                raise ValueError("limit must be positive")
+        except (TypeError, ValueError):
+            response, status_code = create_error_response(
+                "ValidationError", "Query parameter 'limit' must be a positive integer"
+            )
+            return jsonify(response), status_code
 
         logger.info(f"📊 Analytics requested (limit: {limit})")
 
